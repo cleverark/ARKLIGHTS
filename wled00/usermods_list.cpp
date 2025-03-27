@@ -11,7 +11,7 @@
  */
 //#include "../usermods/EXAMPLE_v2/usermod_v2_example.h"
 
-#include "../usermods/mpu6050_imu/usermod_mpu6050_imu.h"
+//#include "../usermods/mpu6050_imu/usermod_mpu6050_imu.h"
 
 
 #ifdef USERMOD_BATTERY
@@ -209,10 +209,6 @@
   #include "../usermods/mpu6050_imu/usermod_mpu6050_imu.h"
 #endif
 
-#ifdef USERMOD_MPU6050_IMU
-  #include "../usermods/mpu6050_imu/usermod_gyro_surge.h"
-#endif
-
 #ifdef USERMOD_LDR_DUSK_DAWN
   #include "../usermods/LDR_Dusk_Dawn_v2/usermod_LDR_Dusk_Dawn_v2.h"
 #endif
@@ -266,7 +262,7 @@ void registerUsermods()
    */
   //UsermodManager::add(new MyExampleUsermod());
 
-  UsermodManager::add(new MPU6050Driver());
+  //UsermodManager::add(new MPU6050Driver());
   #ifdef USERMOD_BATTERY
   UsermodManager::add(new UsermodBattery());
   #endif
