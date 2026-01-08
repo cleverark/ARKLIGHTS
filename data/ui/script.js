@@ -144,6 +144,47 @@ function setImpactDetectionEnabled(enabled) {
     });
 }
 
+function setBrakingEnabled(enabled) {
+    fetch('/api', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ braking_enabled: enabled })
+    }).then(() => {
+        // Show/hide braking settings
+        const settingsDiv = document.getElementById('brakingSettings');
+        if (settingsDiv) {
+            settingsDiv.style.display = enabled ? 'block' : 'none';
+        }
+        updateStatus();
+    });
+}
+
+function setBrakingThreshold(value) {
+    document.getElementById('brakingThresholdValue').textContent = value;
+    fetch('/api', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ braking_threshold: parseFloat(value) })
+    });
+}
+
+function setBrakingEffect(value) {
+    fetch('/api', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ braking_effect: parseInt(value) })
+    });
+}
+
+function setBrakingBrightness(value) {
+    document.getElementById('brakingBrightnessValue').textContent = value;
+    fetch('/api', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ braking_brightness: parseInt(value) })
+    });
+}
+
 function setMotionSensitivity(value) {
     document.getElementById('motionSensitivityValue').textContent = value;
     fetch('/api', {
@@ -547,6 +588,7 @@ function updateStatus() {
                 `Headlight Mode: ${data.headlight_mode == 0 ? 'Solid White' : 'Effect'}<br>` +
                 `Blinker: ${data.blinker_active ? (data.blinker_direction > 0 ? 'Right' : 'Left') : 'Inactive'}<br>` +
                 `Park Mode: ${data.park_mode_active ? 'Active' : 'Inactive'}<br>` +
+                `Braking: ${data.braking_active ? 'Active' : 'Inactive'}<br>` +
                 `Calibration: ${data.calibration_complete ? 'Complete' : 'Not calibrated'}<br>` +
                 `WiFi AP: ${data.apName}<br>` +
                 `Headlight: Effect ${data.headlightEffect}, Color #${data.headlightColor}<br>` +

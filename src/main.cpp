@@ -4,6 +4,7 @@
 #include <WebServer.h>
 #include <ArduinoJson.h>
 #include <SPIFFS.h>
+#include <Preferences.h>  // NVS for persistent settings storage
 #include <Wire.h>
 #include <MPU6050.h>
 #include <Update.h>
@@ -248,6 +249,10 @@ uint16_t startupDuration = 3000; // Duration in milliseconds
 #define MPU_SCL_PIN 6
 MPU6050 mpu;
 
+// NVS for persistent settings storage (survives OTA filesystem updates)
+Preferences nvs;
+const char* NVS_NAMESPACE = "arklights";
+
 // Motion control settings
 bool motionEnabled = true;
 bool blinkerEnabled = true;
@@ -301,6 +306,23 @@ const unsigned long DIRECTION_SUSTAIN_TIME = 500;  // ms direction must be susta
 const unsigned long DIRECTION_FADE_DURATION = 1500;  // ms for smooth fade transition (needs to be visible)
 uint8_t headlightMode = 0;  // 0 = solid white, 1 = headlight effect
 float directionFadeProgress = 0.0;  // 0.0 to 1.0 for fade transition
+
+// Braking detection state
+bool brakingEnabled = false;  // Default to disabled - user must enable via UI
+bool brakingActive = false;
+float brakingThreshold = -0.5;  // G-force deceleration threshold (negative = deceleration)
+const unsigned long BRAKING_SUSTAIN_TIME = 200;  // ms deceleration must be sustained before triggering
+unsigned long brakingDetectedTime = 0;
+unsigned long brakingStartTime = 0;
+uint8_t brakingEffect = 0;  // 0 = flash, 1 = pulse
+uint8_t brakingBrightness = 255;  // Brightness during braking
+uint8_t brakingFlashCount = 0;  // Number of flashes completed (0-3)
+uint8_t brakingPulseCount = 0;  // Number of pulses completed (0-3)
+unsigned long lastBrakingFlash = 0;
+unsigned long lastBrakingPulse = 0;
+const unsigned long BRAKING_FLASH_INTERVAL = 200;  // ms between flashes
+const unsigned long BRAKING_PULSE_DURATION = 300;  // ms per pulse cycle
+const uint8_t BRAKING_CYCLE_COUNT = 3;  // Number of flash/pulse cycles before going solid
 
 // Filtering for direction detection (to reduce noise)
 float filteredForwardAccel = 0.0;
@@ -498,6 +520,8 @@ String apPassword = "float420";
 void updateEffects();
 bool shouldUpdateEffect(EffectTiming& timing, uint8_t speed, uint8_t length);
 void processDirectionDetection(MotionData& data);
+void processBrakingDetection(MotionData& data);
+void showBrakingEffect();
 void blendLEDArrays(CRGB* target, CRGB* source1, CRGB* source2, uint8_t numLeds, float fadeProgress);
 void applyEffectToArray(CRGB* leds, uint8_t numLeds, uint8_t effect, CRGB color, EffectTiming& timing, uint8_t ledType, uint8_t colorOrder);
 
@@ -600,6 +624,9 @@ void fillRainbowWithColorOrder(CRGB* leds, uint8_t numLeds, uint8_t initialHue, 
 void initFilesystem();
 bool saveSettings();
 bool loadSettings();
+bool saveSettingsToNVS();
+bool loadSettingsFromNVS();
+bool migrateSettingsFromSPIFFSToNVS();
 void testFilesystem();
 
 // ESPNow functions
@@ -919,7 +946,13 @@ void updateEffects() {
         return; // Skip normal effects when in park mode
     }
     
-    // Priority 2: Blinker effects (medium priority - overrides normal effects)
+    // Priority 2: Braking effects (high priority - but allow headlight to continue)
+    if (brakingActive) {
+        showBrakingEffect();
+        // Continue to update headlight normally (don't return)
+    }
+    
+    // Priority 3: Blinker effects (medium priority - overrides normal effects)
     if (blinkerActive) {
         showBlinkerEffect(blinkerDirection);
         return; // Skip normal effects when blinkers are active
@@ -1600,29 +1633,76 @@ void effectCandleImproved(CRGB* leds, uint8_t numLeds, uint16_t step) {
     }
 }
 
-// Improved Knight Rider Effect with consistent timing
+// Improved Knight Rider Effect with consistent timing (KITT scanner)
 void effectKnightRiderImproved(CRGB* leds, uint8_t numLeds, CRGB color, uint16_t step) {
-    // Fade all LEDs
+    // Fade all LEDs to black (preserves color better than nscale8)
+    // Use a slower fade to black to preserve color hue
     for (uint8_t i = 0; i < numLeds; i++) {
-        leds[i].nscale8(200); // Fade by 22%
+        // Fade each channel independently toward black (preserves color better)
+        // Fade by ~25% per frame for smoother trail
+        leds[i].r = (leds[i].r * 192) >> 8; // ~25% fade
+        leds[i].g = (leds[i].g * 192) >> 8;
+        leds[i].b = (leds[i].b * 192) >> 8;
     }
     
-    // Use step for consistent scanner movement
-    uint8_t scannerSize = 3 + (step % 3);
-    uint8_t scannerPos = (step / 2) % ((numLeds + scannerSize) * 2);
+    // Calculate scanner position (smooth back-and-forth motion)
+    // Slow down the scanner by dividing step (Knight Rider should be slower)
+    // Allow scanner to go "off-screen" past the edges for authentic KITT effect
+    // The scanner appears to leave the LED bar before turning around
+    uint16_t trailLength = numLeds / 3;
+    if (trailLength < 3) trailLength = 3;
+    if (trailLength > 8) trailLength = 8;
     
-    // Determine direction (forward or backward)
-    bool forward = (scannerPos < (numLeds + scannerSize));
-    uint8_t actualPos = forward ? scannerPos : ((numLeds + scannerSize) * 2) - scannerPos - 1;
+    // Extend the cycle to allow scanner to go past edges
+    // Forward: -trailLength to numLeds + trailLength
+    // Backward: numLeds + trailLength to -trailLength
+    uint16_t cycleLength = (numLeds + trailLength * 2) * 2;
+    uint16_t position = (step / 4) % cycleLength; // Divide by 4 to slow down scanner
     
-    // Draw scanner
-    for (uint8_t i = 0; i < scannerSize; i++) {
-        if (actualPos - i >= 0 && actualPos - i < numLeds) {
-            uint8_t brightness = 255 - (i * 255 / scannerSize);
-            CRGB scannerColor = color;
-            scannerColor.nscale8(brightness);
-            leds[actualPos - i] = scannerColor;
+    // Determine direction and actual position (can be negative or beyond numLeds)
+    int16_t scannerPos;
+    bool forward;
+    if (position < (numLeds + trailLength * 2)) {
+        // Forward direction: goes from -trailLength to numLeds + trailLength
+        scannerPos = (int16_t)position - trailLength;
+        forward = true;
+    } else {
+        // Backward direction: goes from numLeds + trailLength to -trailLength
+        scannerPos = (int16_t)(cycleLength - position) - trailLength;
+        forward = false;
+    }
+    
+    // Draw trail first (behind scanner) - only draw visible parts
+    for (uint8_t i = 1; i <= trailLength; i++) {
+        int16_t trailPos;
+        
+        if (forward) {
+            // Trail behind (to the left when going forward)
+            trailPos = scannerPos - i;
+        } else {
+            // Trail behind (to the right when going backward)
+            trailPos = scannerPos + i;
         }
+        
+        // Only draw if position is visible (within LED bounds)
+        if (trailPos >= 0 && trailPos < numLeds) {
+            // Exponential fade for smooth trail (brighter closer to main light)
+            // Use a curve: brightness = 255 * (1 - (i/trailLength)^2)
+            float fadeRatio = (float)i / trailLength;
+            uint8_t brightness = 255 * (1.0 - fadeRatio * fadeRatio);
+            
+            // Scale color channels independently to preserve hue
+            CRGB trailColor;
+            trailColor.r = (color.r * brightness) >> 8;
+            trailColor.g = (color.g * brightness) >> 8;
+            trailColor.b = (color.b * brightness) >> 8;
+            leds[trailPos] = trailColor; // Overwrite (not blend) to prevent color mixing
+        }
+    }
+    
+    // Main scanner light (bright center) - only draw if visible
+    if (scannerPos >= 0 && scannerPos < numLeds) {
+        leds[scannerPos] = color; // Full brightness main light
     }
 }
 
@@ -2100,6 +2180,10 @@ void updateMotionControl() {
         processDirectionDetection(data);
     }
     
+    if (brakingEnabled) {
+        processBrakingDetection(data);
+    }
+    
     if (blinkerEnabled) {
         processBlinkers(data);
     }
@@ -2110,6 +2194,139 @@ void updateMotionControl() {
     
     if (impactDetectionEnabled) {
         processImpactDetection(data);
+    }
+}
+
+void processBrakingDetection(MotionData& data) {
+    if (!brakingEnabled || !motionEnabled) return;
+    
+    unsigned long currentTime = millis();
+    float forwardAccel = calibration.valid ? getCalibratedForwardAccel(data) : data.accelX;
+    
+    // Only detect braking when moving forward (negative acceleration = deceleration)
+    // Also check if we're not in park mode (stationary)
+    bool isDecelerating = isMovingForward && forwardAccel < brakingThreshold && !parkModeActive;
+    
+    if (isDecelerating) {
+        if (brakingDetectedTime == 0) {
+            // Start tracking sustained deceleration
+            brakingDetectedTime = currentTime;
+        } else {
+            unsigned long elapsed = currentTime - brakingDetectedTime;
+            if (elapsed >= BRAKING_SUSTAIN_TIME && !brakingActive) {
+                // Deceleration sustained long enough - activate braking
+                brakingActive = true;
+                brakingStartTime = currentTime;
+                brakingFlashCount = 0;
+                brakingPulseCount = 0;
+                lastBrakingFlash = currentTime;
+                lastBrakingPulse = currentTime;
+                #if DEBUG_ENABLED
+                Serial.printf("🛑 Braking detected! Deceleration: %.2fG (sustained for %dms)\n", 
+                             forwardAccel, elapsed);
+                #endif
+            }
+        }
+    } else {
+        // Not decelerating - reset detection timer
+        if (brakingDetectedTime > 0) {
+            brakingDetectedTime = 0;
+        }
+        
+        // Stop braking if:
+        // 1. Acceleration becomes positive (starting to go forward again)
+        // 2. Or we're in park mode (stopped)
+        if (brakingActive && (forwardAccel >= 0 || parkModeActive)) {
+            brakingActive = false;
+            brakingFlashCount = 0;
+            brakingPulseCount = 0;
+            #if DEBUG_ENABLED
+            Serial.println("🛑 Braking ended");
+            #endif
+        }
+    }
+}
+
+void showBrakingEffect() {
+    if (!brakingActive) return;
+    
+    unsigned long currentTime = millis();
+    unsigned long brakingElapsed = currentTime - brakingStartTime;
+    
+    // Determine which lights are taillight (based on direction)
+    CRGB* targetLights = isMovingForward ? taillight : headlight;
+    uint8_t targetCount = isMovingForward ? taillightLedCount : headlightLedCount;
+    uint8_t targetLedType = isMovingForward ? taillightLedType : headlightLedType;
+    uint8_t targetColorOrder = isMovingForward ? taillightColorOrder : headlightColorOrder;
+    
+    if (brakingEffect == 0) {
+        // Flash mode: Flash 3 times then stay solid red
+        if (brakingFlashCount < BRAKING_CYCLE_COUNT) {
+            // Still in flash phase
+            unsigned long flashElapsed = currentTime - lastBrakingFlash;
+            bool flashOn = (flashElapsed % (BRAKING_FLASH_INTERVAL * 2)) < BRAKING_FLASH_INTERVAL;
+            
+            if (flashOn) {
+                FastLED.setBrightness(brakingBrightness);
+                fillSolidWithColorOrder(targetLights, targetCount, CRGB::Red, targetLedType, targetColorOrder);
+            } else {
+                // Off phase
+                fillSolidWithColorOrder(targetLights, targetCount, CRGB::Black, targetLedType, targetColorOrder);
+            }
+            
+            // Check if we've completed a flash cycle
+            if (flashElapsed >= BRAKING_FLASH_INTERVAL * 2) {
+                brakingFlashCount++;
+                lastBrakingFlash = currentTime;
+            }
+        } else {
+            // Flash phase complete - stay solid red
+            FastLED.setBrightness(brakingBrightness);
+            fillSolidWithColorOrder(targetLights, targetCount, CRGB::Red, targetLedType, targetColorOrder);
+        }
+    } else {
+        // Pulse mode: Pulse from center 3 times then stay solid red
+        if (brakingPulseCount < BRAKING_CYCLE_COUNT) {
+            // Still in pulse phase
+            unsigned long pulseElapsed = (currentTime - lastBrakingPulse) % BRAKING_PULSE_DURATION;
+            float pulseProgress = (float)pulseElapsed / BRAKING_PULSE_DURATION;
+            
+            // Clear taillight first
+            fillSolidWithColorOrder(targetLights, targetCount, CRGB::Black, targetLedType, targetColorOrder);
+            
+            // Pulse from center outward
+            uint8_t center = targetCount / 2;
+            float pulseWidth = sin(pulseProgress * PI) * (targetCount / 2.0);
+            uint8_t pulseStart = center - (uint8_t)pulseWidth;
+            uint8_t pulseEnd = center + (uint8_t)pulseWidth;
+            
+            // Clamp to array bounds
+            if (pulseStart < 0) pulseStart = 0;
+            if (pulseEnd > targetCount) pulseEnd = targetCount;
+            
+            // Fill pulse region with red
+            for (uint8_t i = pulseStart; i < pulseEnd; i++) {
+                float distanceFromCenter = abs((float)(i - center));
+                float normalizedDistance = pulseWidth > 0 ? distanceFromCenter / pulseWidth : 0;
+                uint8_t brightness = brakingBrightness * (1.0 - normalizedDistance);
+                CRGB red = CRGB::Red;
+                red.nscale8(brightness);
+                targetLights[i] = red;
+            }
+            
+            // Apply color order
+            applyColorOrderToArray(targetLights, targetCount, targetLedType, targetColorOrder);
+            
+            // Check if we've completed a pulse cycle (when pulseProgress wraps back to 0)
+            if (pulseElapsed < 50 && currentTime - lastBrakingPulse >= BRAKING_PULSE_DURATION) {
+                brakingPulseCount++;
+                lastBrakingPulse = currentTime;
+            }
+        } else {
+            // Pulse phase complete - stay solid red
+            FastLED.setBrightness(brakingBrightness);
+            fillSolidWithColorOrder(targetLights, targetCount, CRGB::Red, targetLedType, targetColorOrder);
+        }
     }
 }
 
@@ -4513,6 +4730,36 @@ void handleAPI() {
             Serial.printf("🔄 Forward acceleration threshold: %.2fG\n", forwardAccelThreshold);
         }
         
+        // Braking detection API
+        if (doc.containsKey("braking_enabled")) {
+            brakingEnabled = doc["braking_enabled"] | false;
+            saveSettings(); // Auto-save
+            #if DEBUG_ENABLED
+            Serial.printf("🛑 Braking detection: %s\n", brakingEnabled ? "enabled" : "disabled");
+            #endif
+        }
+        if (doc.containsKey("braking_threshold")) {
+            brakingThreshold = doc["braking_threshold"] | -0.5;
+            saveSettings(); // Auto-save
+            #if DEBUG_ENABLED
+            Serial.printf("🛑 Braking threshold: %.2fG\n", brakingThreshold);
+            #endif
+        }
+        if (doc.containsKey("braking_effect")) {
+            brakingEffect = doc["braking_effect"] | 0;
+            saveSettings(); // Auto-save
+            #if DEBUG_ENABLED
+            Serial.printf("🛑 Braking effect: %s\n", brakingEffect == 0 ? "Flash" : "Pulse");
+            #endif
+        }
+        if (doc.containsKey("braking_brightness")) {
+            brakingBrightness = doc["braking_brightness"] | 255;
+            saveSettings(); // Auto-save
+            #if DEBUG_ENABLED
+            Serial.printf("🛑 Braking brightness: %d\n", brakingBrightness);
+            #endif
+        }
+        
         // OTA Update API
         if (doc.containsKey("otaUpdateURL")) {
             otaUpdateURL = doc["otaUpdateURL"].as<String>();
@@ -4648,6 +4895,14 @@ void handleStatus() {
     doc["headlight_mode"] = headlightMode;
     doc["is_moving_forward"] = isMovingForward;
     doc["forward_accel_threshold"] = forwardAccelThreshold;
+    
+    // Braking detection status
+    doc["braking_enabled"] = brakingEnabled;
+    doc["braking_active"] = brakingActive;
+    doc["braking_threshold"] = brakingThreshold;
+    doc["braking_effect"] = brakingEffect;
+    doc["braking_brightness"] = brakingBrightness;
+    
     doc["blinker_delay"] = blinkerDelay;
     doc["blinker_timeout"] = blinkerTimeout;
     doc["park_detection_angle"] = parkDetectionAngle;
@@ -5071,6 +5326,12 @@ bool saveSettings() {
     doc["headlight_mode"] = headlightMode;
     doc["forward_accel_threshold"] = forwardAccelThreshold;
     
+    // Braking detection settings
+    doc["braking_enabled"] = brakingEnabled;
+    doc["braking_threshold"] = brakingThreshold;
+    doc["braking_effect"] = brakingEffect;
+    doc["braking_brightness"] = brakingBrightness;
+    
     // Park mode effect settings
     doc["park_effect"] = parkEffect;
     doc["park_effect_speed"] = parkEffectSpeed;
@@ -5131,30 +5392,179 @@ bool saveSettings() {
     doc["calibration_right_y"] = calibration.rightAccelY;
     doc["calibration_right_z"] = calibration.rightAccelZ;
     
-    // Save to file
+    // Save to NVS (primary storage - survives OTA filesystem updates)
+    bool nvsSuccess = saveSettingsToNVS();
+    
+    // Also save to SPIFFS for backward compatibility and migration
     File file = SPIFFS.open("/settings.json", "w");
     if (!file) {
-        Serial.println("❌ Failed to open settings.json for writing");
-        return false;
+        Serial.println("⚠️ Failed to open settings.json for writing (SPIFFS)");
+        // Still return success if NVS saved
+        return nvsSuccess;
     }
     
     size_t bytesWritten = serializeJson(doc, file);
     file.close();
     
     if (bytesWritten > 0) {
-        Serial.printf("✅ Settings saved to filesystem (%d bytes)\n", bytesWritten);
+        Serial.printf("✅ Settings saved to SPIFFS (%d bytes)\n", bytesWritten);
+    } else {
+        Serial.println("⚠️ Failed to write settings to SPIFFS");
+    }
+    
+    if (nvsSuccess) {
+        Serial.printf("✅ Settings saved to NVS (survives OTA filesystem updates)\n");
         Serial.printf("Headlight: RGB(%d,%d,%d), Taillight: RGB(%d,%d,%d)\n", 
                       headlightColor.r, headlightColor.g, headlightColor.b,
                       taillightColor.r, taillightColor.g, taillightColor.b);
         return true;
     } else {
-        Serial.println("❌ Failed to write settings to filesystem");
+        // If NVS failed but SPIFFS succeeded, still return true (backward compatibility)
+        return (bytesWritten > 0);
+    }
+}
+
+// Save all settings to NVS (survives OTA filesystem updates)
+bool saveSettingsToNVS() {
+    if (!nvs.begin(NVS_NAMESPACE, false)) {
+        Serial.println("❌ Failed to open NVS namespace");
+        return false;
+    }
+    
+    DynamicJsonDocument doc(4096);
+    
+    // Light settings
+    doc["headlight_effect"] = headlightEffect;
+    doc["taillight_effect"] = taillightEffect;
+    doc["headlight_color_r"] = headlightColor.r;
+    doc["headlight_color_g"] = headlightColor.g;
+    doc["headlight_color_b"] = headlightColor.b;
+    doc["taillight_color_r"] = taillightColor.r;
+    doc["taillight_color_g"] = taillightColor.g;
+    doc["taillight_color_b"] = taillightColor.b;
+    doc["global_brightness"] = globalBrightness;
+    doc["effect_speed"] = effectSpeed;
+    doc["current_preset"] = currentPreset;
+    
+    // Startup sequence settings
+    doc["startup_sequence"] = startupSequence;
+    doc["startup_enabled"] = startupEnabled;
+    doc["startup_duration"] = startupDuration;
+    
+    // Motion control settings
+    doc["motion_enabled"] = motionEnabled;
+    doc["blinker_enabled"] = blinkerEnabled;
+    doc["park_mode_enabled"] = parkModeEnabled;
+    doc["impact_detection_enabled"] = impactDetectionEnabled;
+    doc["motion_sensitivity"] = motionSensitivity;
+    doc["blinker_delay"] = blinkerDelay;
+    doc["blinker_timeout"] = blinkerTimeout;
+    doc["park_detection_angle"] = parkDetectionAngle;
+    doc["impact_threshold"] = impactThreshold;
+    doc["park_accel_noise_threshold"] = parkAccelNoiseThreshold;
+    doc["park_gyro_noise_threshold"] = parkGyroNoiseThreshold;
+    doc["park_stationary_time"] = parkStationaryTime;
+    
+    // Direction-based lighting settings
+    doc["direction_based_lighting"] = directionBasedLighting;
+    doc["headlight_mode"] = headlightMode;
+    doc["forward_accel_threshold"] = forwardAccelThreshold;
+    
+    // Braking detection settings
+    doc["braking_enabled"] = brakingEnabled;
+    doc["braking_threshold"] = brakingThreshold;
+    doc["braking_effect"] = brakingEffect;
+    doc["braking_brightness"] = brakingBrightness;
+    
+    // Park mode effect settings
+    doc["park_effect"] = parkEffect;
+    doc["park_effect_speed"] = parkEffectSpeed;
+    doc["park_headlight_color_r"] = parkHeadlightColor.r;
+    doc["park_headlight_color_g"] = parkHeadlightColor.g;
+    doc["park_headlight_color_b"] = parkHeadlightColor.b;
+    doc["park_taillight_color_r"] = parkTaillightColor.r;
+    doc["park_taillight_color_g"] = parkTaillightColor.g;
+    doc["park_taillight_color_b"] = parkTaillightColor.b;
+    doc["park_brightness"] = parkBrightness;
+    
+    // OTA Update settings
+    doc["ota_update_url"] = otaUpdateURL;
+    
+    // LED configuration
+    doc["headlight_count"] = headlightLedCount;
+    doc["taillight_count"] = taillightLedCount;
+    doc["headlight_type"] = headlightLedType;
+    doc["taillight_type"] = taillightLedType;
+    doc["headlight_order"] = headlightColorOrder;
+    doc["taillight_order"] = taillightColorOrder;
+    
+    // WiFi settings
+    doc["apName"] = apName;
+    doc["apPassword"] = apPassword;
+    
+    // ESPNow settings
+    doc["enableESPNow"] = enableESPNow;
+    doc["useESPNowSync"] = useESPNowSync;
+    doc["espNowChannel"] = espNowChannel;
+    
+    // Group settings
+    doc["groupCode"] = groupCode;
+    doc["isGroupMaster"] = isGroupMaster;
+    doc["allowGroupJoin"] = allowGroupJoin;
+    doc["deviceName"] = deviceName;
+    
+    // Calibration data (CRITICAL - must survive OTA filesystem updates)
+    doc["calibration_complete"] = calibrationComplete;
+    doc["calibration_valid"] = calibration.valid;
+    doc["calibration_forward_axis"] = String(calibration.forwardAxis);
+    doc["calibration_forward_sign"] = calibration.forwardSign;
+    doc["calibration_leftright_axis"] = String(calibration.leftRightAxis);
+    doc["calibration_leftright_sign"] = calibration.leftRightSign;
+    doc["calibration_level_x"] = calibration.levelAccelX;
+    doc["calibration_level_y"] = calibration.levelAccelY;
+    doc["calibration_level_z"] = calibration.levelAccelZ;
+    doc["calibration_forward_x"] = calibration.forwardAccelX;
+    doc["calibration_forward_y"] = calibration.forwardAccelY;
+    doc["calibration_forward_z"] = calibration.forwardAccelZ;
+    doc["calibration_backward_x"] = calibration.backwardAccelX;
+    doc["calibration_backward_y"] = calibration.backwardAccelY;
+    doc["calibration_backward_z"] = calibration.backwardAccelZ;
+    doc["calibration_left_x"] = calibration.leftAccelX;
+    doc["calibration_left_y"] = calibration.leftAccelY;
+    doc["calibration_left_z"] = calibration.leftAccelZ;
+    doc["calibration_right_x"] = calibration.rightAccelX;
+    doc["calibration_right_y"] = calibration.rightAccelY;
+    doc["calibration_right_z"] = calibration.rightAccelZ;
+    
+    // Serialize to string
+    String jsonString;
+    serializeJson(doc, jsonString);
+    
+    // Save to NVS (max 4000 bytes per key, so we'll use a single key)
+    size_t bytesWritten = nvs.putString("settings", jsonString);
+    nvs.end();
+    
+    if (bytesWritten > 0) {
+        Serial.printf("✅ Settings saved to NVS (%d bytes)\n", bytesWritten);
+        return true;
+    } else {
+        Serial.println("❌ Failed to write settings to NVS");
         return false;
     }
 }
 
 // Load all settings from filesystem
 bool loadSettings() {
+    // Try NVS first (survives OTA filesystem updates)
+    if (loadSettingsFromNVS()) {
+        Serial.println("✅ Settings loaded from NVS");
+        // Migrate from SPIFFS to NVS if SPIFFS has newer data (one-time migration)
+        migrateSettingsFromSPIFFSToNVS();
+        return true;
+    }
+    
+    // Fallback to SPIFFS (for backward compatibility)
+    Serial.println("⚠️ No settings in NVS, trying SPIFFS...");
     File file = SPIFFS.open("/settings.json", "r");
     if (!file) {
         Serial.println("⚠️ No settings file found, using defaults");
@@ -5240,6 +5650,12 @@ bool loadSettings() {
     headlightMode = doc["headlight_mode"] | 0;
     forwardAccelThreshold = doc["forward_accel_threshold"] | 0.3;
     
+    // Load braking detection settings
+    brakingEnabled = doc["braking_enabled"] | false;  // Default to disabled
+    brakingThreshold = doc["braking_threshold"] | -0.5;
+    brakingEffect = doc["braking_effect"] | 0;
+    brakingBrightness = doc["braking_brightness"] | 255;
+    
     // Load park mode effect settings
     parkEffect = doc["park_effect"] | FX_BREATH;
     parkEffectSpeed = doc["park_effect_speed"] | 64;
@@ -5313,7 +5729,7 @@ bool loadSettings() {
         Serial.printf("Left/Right axis: %c (sign: %d)\n", calibration.leftRightAxis, calibration.leftRightSign);
     }
     
-    Serial.println("✅ Settings loaded from filesystem:");
+    Serial.println("✅ Settings loaded from SPIFFS");
     Serial.printf("Headlight: RGB(%d,%d,%d), Taillight: RGB(%d,%d,%d)\n", 
                   headlightColor.r, headlightColor.g, headlightColor.b,
                   taillightColor.r, taillightColor.g, taillightColor.b);
@@ -5322,7 +5738,205 @@ bool loadSettings() {
     Serial.printf("Startup: %s (%dms), Enabled: %s\n", 
                   getStartupSequenceName(startupSequence).c_str(), startupDuration, startupEnabled ? "Yes" : "No");
     
+    // Migrate to NVS for future persistence
+    Serial.println("🔄 Migrating settings from SPIFFS to NVS...");
+    if (saveSettingsToNVS()) {
+        Serial.println("✅ Settings migrated to NVS (will survive OTA filesystem updates)");
+    } else {
+        Serial.println("⚠️ Failed to migrate settings to NVS");
+    }
+    
     return true;
+}
+
+// Load all settings from NVS (survives OTA filesystem updates)
+bool loadSettingsFromNVS() {
+    if (!nvs.begin(NVS_NAMESPACE, true)) {  // Read-only mode
+        Serial.println("⚠️ Failed to open NVS namespace (read-only)");
+        return false;
+    }
+    
+    if (!nvs.isKey("settings")) {
+        Serial.println("⚠️ No settings found in NVS");
+        nvs.end();
+        return false;
+    }
+    
+    String jsonString = nvs.getString("settings");
+    nvs.end();
+    
+    if (jsonString.length() == 0) {
+        Serial.println("⚠️ Settings string is empty in NVS");
+        return false;
+    }
+    
+    DynamicJsonDocument doc(4096);
+    DeserializationError error = deserializeJson(doc, jsonString);
+    
+    if (error) {
+        Serial.printf("❌ Failed to parse NVS settings: %s\n", error.c_str());
+        return false;
+    }
+    
+    // Load all settings (same structure as SPIFFS version)
+    // Light settings
+    headlightEffect = doc["headlight_effect"] | 0;
+    taillightEffect = doc["taillight_effect"] | 0;
+    headlightColor.r = doc["headlight_color_r"] | 255;
+    headlightColor.g = doc["headlight_color_g"] | 255;
+    headlightColor.b = doc["headlight_color_b"] | 255;
+    taillightColor.r = doc["taillight_color_r"] | 255;
+    taillightColor.g = doc["taillight_color_g"] | 0;
+    taillightColor.b = doc["taillight_color_b"] | 0;
+    globalBrightness = doc["global_brightness"] | 128;
+    effectSpeed = doc["effect_speed"] | 128;
+    currentPreset = doc["current_preset"] | 0;
+    
+    // Startup sequence settings
+    startupSequence = doc["startup_sequence"] | STARTUP_NONE;
+    startupEnabled = doc["startup_enabled"] | false;
+    startupDuration = doc["startup_duration"] | 3000;
+    
+    // Motion control settings
+    motionEnabled = doc["motion_enabled"] | true;
+    blinkerEnabled = doc["blinker_enabled"] | true;
+    parkModeEnabled = doc["park_mode_enabled"] | true;
+    impactDetectionEnabled = doc["impact_detection_enabled"] | true;
+    motionSensitivity = doc["motion_sensitivity"] | 1.0;
+    blinkerDelay = doc["blinker_delay"] | 300;
+    blinkerTimeout = doc["blinker_timeout"] | 2000;
+    parkDetectionAngle = doc["park_detection_angle"] | 15;
+    impactThreshold = doc["impact_threshold"] | 3;
+    parkAccelNoiseThreshold = doc["park_accel_noise_threshold"] | 0.05;
+    parkGyroNoiseThreshold = doc["park_gyro_noise_threshold"] | 2.5;
+    parkStationaryTime = doc["park_stationary_time"] | 2000;
+    
+    // Direction-based lighting settings
+    directionBasedLighting = doc["direction_based_lighting"] | false;
+    headlightMode = doc["headlight_mode"] | 0;
+    forwardAccelThreshold = doc["forward_accel_threshold"] | 0.3;
+    
+    // Braking detection settings
+    brakingEnabled = doc["braking_enabled"] | false;
+    brakingThreshold = doc["braking_threshold"] | -0.5;
+    brakingEffect = doc["braking_effect"] | 0;
+    brakingBrightness = doc["braking_brightness"] | 255;
+    
+    // Load park mode effect settings
+    parkEffect = doc["park_effect"] | FX_BREATH;
+    parkEffectSpeed = doc["park_effect_speed"] | 64;
+    parkHeadlightColor.r = doc["park_headlight_color_r"] | 0;
+    parkHeadlightColor.g = doc["park_headlight_color_g"] | 0;
+    parkHeadlightColor.b = doc["park_headlight_color_b"] | 255;
+    parkTaillightColor.r = doc["park_taillight_color_r"] | 0;
+    parkTaillightColor.g = doc["park_taillight_color_g"] | 0;
+    parkTaillightColor.b = doc["park_taillight_color_b"] | 255;
+    parkBrightness = doc["park_brightness"] | 128;
+    
+    // Load OTA Update settings
+    otaUpdateURL = doc["ota_update_url"] | "";
+    
+    // Load LED configuration
+    headlightLedCount = doc["headlight_count"] | 11;
+    taillightLedCount = doc["taillight_count"] | 11;
+    headlightLedType = doc["headlight_type"] | 0;
+    taillightLedType = doc["taillight_type"] | 0;
+    headlightColorOrder = doc["headlight_order"] | 1;
+    taillightColorOrder = doc["taillight_order"] | 1;
+    
+    // Load WiFi settings
+    apName = doc["apName"] | "ARKLIGHTS-AP";
+    apPassword = doc["apPassword"] | "float420";
+    
+    // Load ESPNow settings
+    enableESPNow = doc["enableESPNow"] | true;
+    useESPNowSync = doc["useESPNowSync"] | true;
+    espNowChannel = doc["espNowChannel"] | 1;
+    
+    // Load group settings
+    groupCode = doc["groupCode"] | "";
+    isGroupMaster = doc["isGroupMaster"] | false;
+    allowGroupJoin = doc["allowGroupJoin"] | false;
+    deviceName = doc["deviceName"] | "";
+    
+    // Load calibration data (CRITICAL - must survive OTA filesystem updates)
+    calibrationComplete = doc["calibration_complete"] | false;
+    calibration.valid = doc["calibration_valid"] | false;
+    if (calibration.valid) {
+        String forwardAxisStr = doc["calibration_forward_axis"] | "X";
+        calibration.forwardAxis = forwardAxisStr.charAt(0);
+        calibration.forwardSign = doc["calibration_forward_sign"] | 1;
+        String leftRightAxisStr = doc["calibration_leftright_axis"] | "Y";
+        calibration.leftRightAxis = leftRightAxisStr.charAt(0);
+        calibration.leftRightSign = doc["calibration_leftright_sign"] | 1;
+        calibration.levelAccelX = doc["calibration_level_x"] | 0.0;
+        calibration.levelAccelY = doc["calibration_level_y"] | 0.0;
+        calibration.levelAccelZ = doc["calibration_level_z"] | 1.0;
+        calibration.forwardAccelX = doc["calibration_forward_x"] | 0.0;
+        calibration.forwardAccelY = doc["calibration_forward_y"] | 0.0;
+        calibration.forwardAccelZ = doc["calibration_forward_z"] | 1.0;
+        calibration.backwardAccelX = doc["calibration_backward_x"] | 0.0;
+        calibration.backwardAccelY = doc["calibration_backward_y"] | 0.0;
+        calibration.backwardAccelZ = doc["calibration_backward_z"] | 1.0;
+        calibration.leftAccelX = doc["calibration_left_x"] | 0.0;
+        calibration.leftAccelY = doc["calibration_left_y"] | 0.0;
+        calibration.leftAccelZ = doc["calibration_left_z"] | 1.0;
+        calibration.rightAccelX = doc["calibration_right_x"] | 0.0;
+        calibration.rightAccelY = doc["calibration_right_y"] | 0.0;
+        calibration.rightAccelZ = doc["calibration_right_z"] | 1.0;
+        
+        Serial.println("✅ Calibration data loaded from NVS:");
+        Serial.printf("Forward axis: %c (sign: %d)\n", calibration.forwardAxis, calibration.forwardSign);
+        Serial.printf("Left/Right axis: %c (sign: %d)\n", calibration.leftRightAxis, calibration.leftRightSign);
+    }
+    
+    return true;
+}
+
+// Migrate settings from SPIFFS to NVS (one-time migration)
+bool migrateSettingsFromSPIFFSToNVS() {
+    // Check if SPIFFS has settings.json
+    if (!SPIFFS.exists("/settings.json")) {
+        return false;  // Nothing to migrate
+    }
+    
+    File file = SPIFFS.open("/settings.json", "r");
+    if (!file) {
+        return false;
+    }
+    
+    // Check if NVS already has settings
+    if (!nvs.begin(NVS_NAMESPACE, true)) {
+        file.close();
+        return false;
+    }
+    
+    bool nvsHasCalibration = nvs.isKey("settings");
+    nvs.end();
+    
+    if (nvsHasCalibration) {
+        // NVS already has settings, no need to migrate
+        file.close();
+        return false;
+    }
+    
+    // Read SPIFFS settings
+    DynamicJsonDocument doc(4096);
+    DeserializationError error = deserializeJson(doc, file);
+    file.close();
+    
+    if (error) {
+        return false;
+    }
+    
+    // Check if SPIFFS has calibration data
+    if (doc.containsKey("calibration_valid") && doc["calibration_valid"]) {
+        Serial.println("🔄 Migrating calibration from SPIFFS to NVS...");
+        // Save current settings (which includes SPIFFS-loaded values) to NVS
+        return saveSettingsToNVS();
+    }
+    
+    return false;
 }
 
 // Test filesystem functionality
