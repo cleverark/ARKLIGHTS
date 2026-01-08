@@ -1,0 +1,6 @@
+{
+  "name": "mpu6050_imu",
+  "dependencies": {
+    "adafruit/Adafruit MPU6050": "^2.2.6"
+  }
+}
