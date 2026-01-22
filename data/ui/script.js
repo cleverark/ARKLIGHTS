@@ -159,6 +159,14 @@ function setBrakingEnabled(enabled) {
     });
 }
 
+function setWhiteLEDsEnabled(enabled) {
+    fetch('/api', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ white_leds_enabled: enabled })
+    }).then(() => updateStatus());
+}
+
 function setBrakingThreshold(value) {
     document.getElementById('brakingThresholdValue').textContent = value;
     fetch('/api', {
@@ -548,6 +556,23 @@ function setHeadlightColor(color) {
     });
 }
 
+function setHeadlightBackgroundEnabled(enabled) {
+    fetch('/api', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ headlightBackgroundEnabled: enabled })
+    });
+}
+
+function setHeadlightBackgroundColor(color) {
+    const hex = color.replace('#', '');
+    fetch('/api', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ headlightBackgroundColor: hex })
+    });
+}
+
 function setTaillightColor(color) {
     const hex = color.replace('#', '');
     fetch('/api', {
@@ -555,6 +580,40 @@ function setTaillightColor(color) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ taillightColor: hex })
     });
+}
+
+function setTaillightBackgroundEnabled(enabled) {
+    fetch('/api', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ taillightBackgroundEnabled: enabled })
+    });
+}
+
+function setTaillightBackgroundColor(color) {
+    const hex = color.replace('#', '');
+    fetch('/api', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ taillightBackgroundColor: hex })
+    });
+}
+
+function normalizeHexColor(value, fallback = '#000000') {
+    if (!value) return fallback;
+    let color = value;
+    if (color.length === 4) {
+        color = '#' + color[1] + color[1] +
+                color[2] + color[2] +
+                color[3] + color[3];
+    } else if (color.length === 3) {
+        color = '#' + color[0] + color[0] +
+                color[1] + color[1] +
+                color[2] + color[2];
+    } else if (!color.startsWith('#')) {
+        color = '#' + color;
+    }
+    return color;
 }
 
 function setHeadlightEffect(effect) {
@@ -629,6 +688,12 @@ function updateStatus() {
                 if (settingsDiv) {
                     settingsDiv.style.display = data.direction_based_lighting ? 'block' : 'none';
                 }
+            }
+            
+            // Update white LEDs checkbox
+            const whiteLEDsEnabledEl = document.getElementById('whiteLEDsEnabled');
+            if (whiteLEDsEnabledEl) {
+                whiteLEDsEnabledEl.checked = data.white_leds_enabled || false;
             }
             
             const headlightModeEl = document.getElementById('headlightMode');
@@ -859,60 +924,58 @@ function updateStatus() {
             if (apPasswordEl) apPasswordEl.value = data.apPassword;
             const headlightColorEl = document.getElementById('headlightColor');
             if (headlightColorEl) {
-                // Ensure color is in proper #rrggbb format
-                let headlightColor = data.headlightColor;
-                if (headlightColor.length === 4) {
-                    // Convert #rgb to #rrggbb
-                    headlightColor = '#' + headlightColor[1] + headlightColor[1] + 
-                                   headlightColor[2] + headlightColor[2] + 
-                                   headlightColor[3] + headlightColor[3];
-                } else if (headlightColor.length === 3) {
-                    // Convert rgb to #rrggbb
-                    headlightColor = '#' + headlightColor[0] + headlightColor[0] + 
-                                   headlightColor[1] + headlightColor[1] + 
-                                   headlightColor[2] + headlightColor[2];
-                } else if (!headlightColor.startsWith('#')) {
-                    headlightColor = '#' + headlightColor;
-                }
-                headlightColorEl.value = headlightColor;
+                headlightColorEl.value = normalizeHexColor(data.headlightColor, '#ffffff');
             }
             const taillightColorEl = document.getElementById('taillightColor');
             if (taillightColorEl) {
-                // Ensure color is in proper #rrggbb format
-                let taillightColor = data.taillightColor;
-                if (taillightColor.length === 4) {
-                    // Convert #rgb to #rrggbb
-                    taillightColor = '#' + taillightColor[1] + taillightColor[1] + 
-                                   taillightColor[2] + taillightColor[2] + 
-                                   taillightColor[3] + taillightColor[3];
-                } else if (taillightColor.length === 3) {
-                    // Convert rgb to #rrggbb
-                    taillightColor = '#' + taillightColor[0] + taillightColor[0] + 
-                                   taillightColor[1] + taillightColor[1] + 
-                                   taillightColor[2] + taillightColor[2];
-                } else if (!taillightColor.startsWith('#')) {
-                    taillightColor = '#' + taillightColor;
-                }
-                taillightColorEl.value = taillightColor;
+                taillightColorEl.value = normalizeHexColor(data.taillightColor, '#ff0000');
+            }
+            const headlightBackgroundEnabledEl = document.getElementById('headlightBackgroundEnabled');
+            if (headlightBackgroundEnabledEl) {
+                headlightBackgroundEnabledEl.checked = data.headlightBackgroundEnabled || false;
+            }
+            const taillightBackgroundEnabledEl = document.getElementById('taillightBackgroundEnabled');
+            if (taillightBackgroundEnabledEl) {
+                taillightBackgroundEnabledEl.checked = data.taillightBackgroundEnabled || false;
+            }
+            const headlightBackgroundColorEl = document.getElementById('headlightBackgroundColor');
+            if (headlightBackgroundColorEl) {
+                headlightBackgroundColorEl.value = normalizeHexColor(data.headlightBackgroundColor, '#000000');
+            }
+            const taillightBackgroundColorEl = document.getElementById('taillightBackgroundColor');
+            if (taillightBackgroundColorEl) {
+                taillightBackgroundColorEl.value = normalizeHexColor(data.taillightBackgroundColor, '#000000');
             }
             const headlightEffectEl = document.getElementById('headlightEffect');
             if (headlightEffectEl) headlightEffectEl.value = data.headlightEffect;
             const taillightEffectEl = document.getElementById('taillightEffect');
             if (taillightEffectEl) taillightEffectEl.value = data.taillightEffect;
             
-            // Update LED configuration elements (with null checks)
+            // Update LED configuration elements (with null checks and explicit type conversion)
             const headlightLedCountEl = document.getElementById('headlightLedCount');
-            if (headlightLedCountEl) headlightLedCountEl.value = data.headlightLedCount;
+            if (headlightLedCountEl && data.headlightLedCount !== undefined) {
+                headlightLedCountEl.value = parseInt(data.headlightLedCount) || 0;
+            }
             const taillightLedCountEl = document.getElementById('taillightLedCount');
-            if (taillightLedCountEl) taillightLedCountEl.value = data.taillightLedCount;
+            if (taillightLedCountEl && data.taillightLedCount !== undefined) {
+                taillightLedCountEl.value = parseInt(data.taillightLedCount) || 0;
+            }
             const headlightLedTypeEl = document.getElementById('headlightLedType');
-            if (headlightLedTypeEl) headlightLedTypeEl.value = data.headlightLedType;
+            if (headlightLedTypeEl && data.headlightLedType !== undefined) {
+                headlightLedTypeEl.value = parseInt(data.headlightLedType) || 0;
+            }
             const taillightLedTypeEl = document.getElementById('taillightLedType');
-            if (taillightLedTypeEl) taillightLedTypeEl.value = data.taillightLedType;
+            if (taillightLedTypeEl && data.taillightLedType !== undefined) {
+                taillightLedTypeEl.value = parseInt(data.taillightLedType) || 0;
+            }
             const headlightColorOrderEl = document.getElementById('headlightColorOrder');
-            if (headlightColorOrderEl) headlightColorOrderEl.value = data.headlightColorOrder;
+            if (headlightColorOrderEl && data.headlightColorOrder !== undefined) {
+                headlightColorOrderEl.value = parseInt(data.headlightColorOrder) || 0;
+            }
             const taillightColorOrderEl = document.getElementById('taillightColorOrder');
-            if (taillightColorOrderEl) taillightColorOrderEl.value = data.taillightColorOrder;
+            if (taillightColorOrderEl && data.taillightColorOrder !== undefined) {
+                taillightColorOrderEl.value = parseInt(data.taillightColorOrder) || 0;
+            }
         });
 }
 
@@ -930,9 +993,39 @@ function updateLEDConfig() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(config)
-    }).then(() => {
-        console.log('LED configuration updated');
-        updateStatus();
+    })
+    .then(response => response.json())
+    .then(data => {
+        console.log('LED configuration updated', data);
+        // Update form fields with the response values to ensure they match what was saved
+        // This prevents the auto-refresh from overwriting with stale values
+        if (data.headlightLedCount !== undefined) {
+            const el = document.getElementById('headlightLedCount');
+            if (el) el.value = data.headlightLedCount;
+        }
+        if (data.taillightLedCount !== undefined) {
+            const el = document.getElementById('taillightLedCount');
+            if (el) el.value = data.taillightLedCount;
+        }
+        if (data.headlightLedType !== undefined) {
+            const el = document.getElementById('headlightLedType');
+            if (el) el.value = data.headlightLedType;
+        }
+        if (data.taillightLedType !== undefined) {
+            const el = document.getElementById('taillightLedType');
+            if (el) el.value = data.taillightLedType;
+        }
+        if (data.headlightColorOrder !== undefined) {
+            const el = document.getElementById('headlightColorOrder');
+            if (el) el.value = data.headlightColorOrder;
+        }
+        if (data.taillightColorOrder !== undefined) {
+            const el = document.getElementById('taillightColorOrder');
+            if (el) el.value = data.taillightColorOrder;
+        }
+    })
+    .catch(error => {
+        console.error('Error updating LED config:', error);
     });
 }
 
@@ -948,6 +1041,36 @@ function testLEDs() {
 function saveLEDConfig() {
     updateLEDConfig();
     alert('LED configuration saved!');
+}
+
+function viewSettings() {
+    fetch('/api/settings')
+        .then(response => response.json())
+        .then(data => {
+            // Format JSON with indentation for readability
+            const formatted = JSON.stringify(data, null, 2);
+            document.getElementById('settingsContent').textContent = formatted;
+            document.getElementById('settingsModal').style.display = 'block';
+        })
+        .catch(error => {
+            console.error('Error fetching settings:', error);
+            document.getElementById('settingsContent').textContent = 'Error loading settings: ' + error.message;
+            document.getElementById('settingsModal').style.display = 'block';
+        });
+}
+
+function closeSettingsModal() {
+    document.getElementById('settingsModal').style.display = 'none';
+}
+
+function copySettings() {
+    const content = document.getElementById('settingsContent').textContent;
+    navigator.clipboard.writeText(content).then(() => {
+        alert('Configuration copied to clipboard!');
+    }).catch(err => {
+        console.error('Failed to copy:', err);
+        alert('Failed to copy to clipboard');
+    });
 }
 
 // ESPNow Functions

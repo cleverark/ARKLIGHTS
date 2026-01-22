@@ -35,28 +35,45 @@
                     <input type="color" id="headlightColor" value="#ffffff" onchange="setHeadlightColor(this.value)">
                 </div>
                 <div class="control-group">
+                    <label>
+                        <input type="checkbox" id="headlightBackgroundEnabled" onchange="setHeadlightBackgroundEnabled(this.checked)">
+                        Use Background Color
+                    </label>
+                </div>
+                <div class="control-group">
+                    <label>Background Color:</label>
+                    <input type="color" id="headlightBackgroundColor" value="#000000" onchange="setHeadlightBackgroundColor(this.value)">
+                </div>
+                <div class="control-group">
                     <label>Effect:</label>
                     <select id="headlightEffect" onchange="setHeadlightEffect(this.value)">
-                        <option value="0">Solid</option>
-                        <option value="1">Breath</option>
-                        <option value="2">Rainbow</option>
-                        <option value="3">Chase</option>
-                        <option value="4">Blink Rainbow</option>
-                        <option value="5">Twinkle</option>
-                        <option value="6">Fire</option>
-                        <option value="7">Meteor</option>
-                        <option value="8">Wave</option>
-                        <option value="9">Comet</option>
-                        <option value="10">Candle</option>
-                        <option value="11">Static Rainbow</option>
-                        <option value="12">Knight Rider</option>
-                        <option value="13">Police</option>
-                        <option value="14">Strobe</option>
-                        <option value="15">Larson Scanner</option>
-                        <option value="16">Color Wipe</option>
-                        <option value="17">Theater Chase</option>
-                        <option value="18">Running Lights</option>
-                        <option value="19">Color Sweep</option>
+                        <optgroup label="Popular">
+                            <option value="0">Solid</option>
+                            <option value="1">Breath</option>
+                            <option value="2">Rainbow</option>
+                            <option value="8">Wave</option>
+                            <option value="16">Color Wipe</option>
+                            <option value="12">Knight Rider</option>
+                        </optgroup>
+                        <optgroup label="Other effects">
+                            <option value="3">Chase</option>
+                            <option value="4">Blink Rainbow</option>
+                            <option value="5">Twinkle</option>
+                            <option value="6">Fire</option>
+                            <option value="7">Meteor</option>
+                            <option value="9">Comet</option>
+                            <option value="10">Candle</option>
+                            <option value="11">Static Rainbow</option>
+                            <option value="13">Police</option>
+                            <option value="14">Strobe</option>
+                            <option value="15">Larson Scanner</option>
+                            <option value="17">Theater Chase</option>
+                            <option value="18">Running Lights</option>
+                            <option value="19">Color Sweep</option>
+                            <option value="20">Rainbow Knight Rider</option>
+                            <option value="21">Dual Knight Rider</option>
+                            <option value="22">Dual Rainbow Knight Rider</option>
+                        </optgroup>
                     </select>
                 </div>
             </div>
@@ -68,28 +85,45 @@
                     <input type="color" id="taillightColor" value="#ff0000" onchange="setTaillightColor(this.value)">
                 </div>
                 <div class="control-group">
+                    <label>
+                        <input type="checkbox" id="taillightBackgroundEnabled" onchange="setTaillightBackgroundEnabled(this.checked)">
+                        Use Background Color
+                    </label>
+                </div>
+                <div class="control-group">
+                    <label>Background Color:</label>
+                    <input type="color" id="taillightBackgroundColor" value="#000000" onchange="setTaillightBackgroundColor(this.value)">
+                </div>
+                <div class="control-group">
                     <label>Effect:</label>
                     <select id="taillightEffect" onchange="setTaillightEffect(this.value)">
-                        <option value="0">Solid</option>
-                        <option value="1">Breath</option>
-                        <option value="2">Rainbow</option>
-                        <option value="3">Chase</option>
-                        <option value="4">Blink Rainbow</option>
-                        <option value="5">Twinkle</option>
-                        <option value="6">Fire</option>
-                        <option value="7">Meteor</option>
-                        <option value="8">Wave</option>
-                        <option value="9">Comet</option>
-                        <option value="10">Candle</option>
-                        <option value="11">Static Rainbow</option>
-                        <option value="12">Knight Rider</option>
-                        <option value="13">Police</option>
-                        <option value="14">Strobe</option>
-                        <option value="15">Larson Scanner</option>
-                        <option value="16">Color Wipe</option>
-                        <option value="17">Theater Chase</option>
-                        <option value="18">Running Lights</option>
-                        <option value="19">Color Sweep</option>
+                        <optgroup label="Popular">
+                            <option value="0">Solid</option>
+                            <option value="1">Breath</option>
+                            <option value="2">Rainbow</option>
+                            <option value="8">Wave</option>
+                            <option value="16">Color Wipe</option>
+                            <option value="12">Knight Rider</option>
+                        </optgroup>
+                        <optgroup label="Other effects">
+                            <option value="3">Chase</option>
+                            <option value="4">Blink Rainbow</option>
+                            <option value="5">Twinkle</option>
+                            <option value="6">Fire</option>
+                            <option value="7">Meteor</option>
+                            <option value="9">Comet</option>
+                            <option value="10">Candle</option>
+                            <option value="11">Static Rainbow</option>
+                            <option value="13">Police</option>
+                            <option value="14">Strobe</option>
+                            <option value="15">Larson Scanner</option>
+                            <option value="17">Theater Chase</option>
+                            <option value="18">Running Lights</option>
+                            <option value="19">Color Sweep</option>
+                            <option value="20">Rainbow Knight Rider</option>
+                            <option value="21">Dual Knight Rider</option>
+                            <option value="22">Dual Rainbow Knight Rider</option>
+                        </optgroup>
                     </select>
                 </div>
             </div>
@@ -193,6 +227,14 @@
                     <input type="range" id="brakingBrightness" min="128" max="255" value="255" 
                            oninput="setBrakingBrightness(this.value)">
                     <small>Brightness of braking effect</small>
+                </div>
+                
+                <div class="control-group">
+                    <label>
+                        <input type="checkbox" id="whiteLEDsEnabled" onchange="setWhiteLEDsEnabled(this.checked)">
+                        White LEDs (Dedicated)
+                    </label>
+                    <small>Control dedicated white LEDs via MOSFET</small>
                 </div>
                 
                 <div class="control-group">
@@ -339,6 +381,9 @@
                     <option value="17">Theater Chase</option>
                     <option value="18">Running Lights</option>
                     <option value="19">Color Sweep</option>
+                    <option value="20">Rainbow Knight Rider</option>
+                    <option value="21">Dual Knight Rider</option>
+                    <option value="22">Dual Rainbow Knight Rider</option>
                 </select>
                 <small>Effect to display when in park mode</small>
             </div>
@@ -563,6 +608,17 @@
             <div class="control-group">
                 <button onclick="testLEDs()" style="background: #ff9800;">Test LEDs (Red→Green→Blue→White)</button>
                 <button onclick="saveLEDConfig()" style="background: #4CAF50;">Save Configuration</button>
+                <button onclick="viewSettings()" style="background: #2196F3;">View Configuration</button>
+            </div>
+        </div>
+        
+        <!-- Settings Viewer Modal -->
+        <div id="settingsModal" style="display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.8); z-index: 1000; overflow: auto;">
+            <div style="background: #2a2a2a; margin: 50px auto; padding: 20px; border-radius: 8px; max-width: 800px; color: #fff;">
+                <h2 style="margin-top: 0;">Configuration File</h2>
+                <pre id="settingsContent" style="background: #1a1a1a; padding: 15px; border-radius: 4px; overflow-x: auto; white-space: pre-wrap; word-wrap: break-word; max-height: 70vh; overflow-y: auto; font-family: monospace; font-size: 12px;"></pre>
+                <button onclick="closeSettingsModal()" style="background: #f44336; color: white; padding: 10px 20px; border: none; border-radius: 4px; cursor: pointer; margin-top: 10px;">Close</button>
+                <button onclick="copySettings()" style="background: #4CAF50; color: white; padding: 10px 20px; border: none; border-radius: 4px; cursor: pointer; margin-top: 10px; margin-left: 10px;">Copy to Clipboard</button>
             </div>
         </div>
         </div>

@@ -64,6 +64,16 @@ struct CRGBW {
 #define TAILLIGHT_CLOCK_PIN 4  // For APA102/LPD8806
 #define DEFAULT_BRIGHTNESS 128
 
+// Dedicated white LED control pins (AO3400 MOSFET gates)
+#define HEADLIGHT_WHITE_PIN 1  // A1/D1 - Controls headlight white LEDs via MOSFET
+#define TAILLIGHT_WHITE_PIN 0  // A0/D0 - Controls taillight white LEDs via MOSFET
+#define WHITE_LED_PWM_FREQ 1000  // PWM frequency in Hz
+#define WHITE_LED_PWM_RESOLUTION 8  // 8-bit resolution (0-255)
+#define WHITE_LED_PWM_CHANNEL_HEADLIGHT 0
+#define WHITE_LED_PWM_CHANNEL_TAILLIGHT 1
+#define WHITE_LED_TEST_MODE 0  // Set to 1 to blink taillight white on boot
+#define WHITE_LED_TEST_LIMIT_BRIGHTNESS 0  // 0=off, else cap brightness (e.g. 26 ≈ 10%)
+
 // LED Configuration (can be changed via web UI)
 uint8_t headlightLedCount = 11;
 uint8_t taillightLedCount = 11;
@@ -121,6 +131,10 @@ struct ESPNowLEDData {
     uint8_t effectSpeed;
     uint8_t headlightColor[3]; // R, G, B
     uint8_t taillightColor[3]; // R, G, B
+    uint8_t headlightBackgroundEnabled;
+    uint8_t taillightBackgroundEnabled;
+    uint8_t headlightBackgroundColor[3]; // R, G, B
+    uint8_t taillightBackgroundColor[3]; // R, G, B
     uint8_t preset;
     uint32_t syncTimestamp;    // Timestamp for timing coordination
     uint16_t masterStep;       // Master step counter for sync
@@ -211,6 +225,9 @@ String bluetoothDeviceName = "ARKLIGHTS-AP";
 #define FX_THEATER_CHASE 17
 #define FX_RUNNING_LIGHTS 18
 #define FX_COLOR_SWEEP 19
+#define FX_RAINBOW_KNIGHT_RIDER 20
+#define FX_DUAL_KNIGHT_RIDER 21
+#define FX_DUAL_RAINBOW_KNIGHT_RIDER 22
 
 // Preset IDs
 #define PRESET_STANDARD 0
@@ -237,7 +254,20 @@ uint8_t headlightEffect = FX_SOLID;
 uint8_t taillightEffect = FX_SOLID;
 CRGB headlightColor = CRGB::White;
 CRGB taillightColor = CRGB::Red;
+bool headlightBackgroundEnabled = false;
+bool taillightBackgroundEnabled = false;
+CRGB headlightBackgroundColor = CRGB::Black;
+CRGB taillightBackgroundColor = CRGB::Black;
+bool effectBackgroundEnabled = false;
+CRGB effectBackgroundColor = CRGB::Black;
 uint8_t effectSpeed = 64; // Speed control (0-255, higher = faster) - Default to slower speed
+
+// Dedicated white LED control (AO3400 MOSFET gates)
+bool whiteLEDsEnabled = false;  // Master enable/disable for white LEDs
+bool headlightWhiteEnabled = true;  // Individual headlight white LED control
+bool taillightWhiteEnabled = true;  // Individual taillight white LED control
+uint8_t headlightWhiteBrightness = 255;  // 0-255 brightness for headlight white LEDs
+uint8_t taillightWhiteBrightness = 255;  // 0-255 brightness for taillight white LEDs
 
 // Startup sequence settings
 uint8_t startupSequence = STARTUP_POWER_ON;
@@ -252,6 +282,7 @@ MPU6050 mpu;
 // NVS for persistent settings storage (survives OTA filesystem updates)
 Preferences nvs;
 const char* NVS_NAMESPACE = "arklights";
+bool nvsMigrationPending = false; // Track if NVS migration needs to happen
 
 // Motion control settings
 bool motionEnabled = true;
@@ -372,6 +403,8 @@ struct GroupMember {
 GroupMember groupMembers[10]; // Max 10 group members
 uint8_t groupMemberCount = 0;
 uint32_t lastGroupHeartbeat = 0;
+uint8_t groupMasterMac[6] = {0};
+bool hasGroupMaster = false;
 
 // ESPNow Callback Functions
 void espNowSendCallback(const uint8_t *mac_addr, esp_now_send_status_t status) {
@@ -415,6 +448,9 @@ void checkMasterTimeout();
 void becomeMaster();
 void generateGroupCode();
 String getDeviceMAC();
+String formatMacAddress(const uint8_t* mac);
+bool parseMacAddress(const String& macStr, uint8_t* outMac);
+String formatColorHex(const CRGB& color);
 
 void espNowReceiveCallback(const uint8_t *mac_addr, const uint8_t *data, int len) {
     // Only process if ESPNow sync is enabled
@@ -453,10 +489,16 @@ void espNowReceiveCallback(const uint8_t *mac_addr, const uint8_t *data, int len
     
     Serial.println("ESPNow: Received LED data from peer");
     
-    // Only accept LED data from authenticated group members or if no group is active
-    if (!isGroupMember(mac_addr) && groupCode.length() > 0) {
-        Serial.println("ESPNow: Ignored data from unauthorized device");
-        return;
+    // Only accept LED data from the group master when in a group
+    if (groupCode.length() > 0) {
+        if (isGroupMaster) {
+            // Leader ignores incoming LED data (local control only)
+            return;
+        }
+        if (!hasGroupMaster || memcmp(mac_addr, groupMasterMac, 6) != 0) {
+            Serial.println("ESPNow: Ignored data from non-master device");
+            return;
+        }
     }
     
     // Apply the received LED settings (but NOT motion-based effects)
@@ -468,6 +510,10 @@ void espNowReceiveCallback(const uint8_t *mac_addr, const uint8_t *data, int len
         effectSpeed = receivedData->effectSpeed;
         headlightColor = CRGB(receivedData->headlightColor[0], receivedData->headlightColor[1], receivedData->headlightColor[2]);
         taillightColor = CRGB(receivedData->taillightColor[0], receivedData->taillightColor[1], receivedData->taillightColor[2]);
+        headlightBackgroundEnabled = receivedData->headlightBackgroundEnabled;
+        taillightBackgroundEnabled = receivedData->taillightBackgroundEnabled;
+        headlightBackgroundColor = CRGB(receivedData->headlightBackgroundColor[0], receivedData->headlightBackgroundColor[1], receivedData->headlightBackgroundColor[2]);
+        taillightBackgroundColor = CRGB(receivedData->taillightBackgroundColor[0], receivedData->taillightBackgroundColor[1], receivedData->taillightBackgroundColor[2]);
         currentPreset = receivedData->preset;
         
         // Sync timing for coordinated effects
@@ -523,7 +569,7 @@ void processDirectionDetection(MotionData& data);
 void processBrakingDetection(MotionData& data);
 void showBrakingEffect();
 void blendLEDArrays(CRGB* target, CRGB* source1, CRGB* source2, uint8_t numLeds, float fadeProgress);
-void applyEffectToArray(CRGB* leds, uint8_t numLeds, uint8_t effect, CRGB color, EffectTiming& timing, uint8_t ledType, uint8_t colorOrder);
+void applyEffectToArray(CRGB* leds, uint8_t numLeds, uint8_t effect, CRGB color, EffectTiming& timing, uint8_t ledType, uint8_t colorOrder, CRGB backgroundColor, bool backgroundEnabled);
 
 // Original effect functions (kept for compatibility)
 void effectBreath(CRGB* leds, uint8_t numLeds, CRGB color);
@@ -565,6 +611,9 @@ void effectColorWipeImproved(CRGB* leds, uint8_t numLeds, CRGB color, uint16_t s
 void effectTheaterChaseImproved(CRGB* leds, uint8_t numLeds, CRGB color, uint16_t step);
 void effectRunningLightsImproved(CRGB* leds, uint8_t numLeds, CRGB color, uint16_t step);
 void effectColorSweepImproved(CRGB* leds, uint8_t numLeds, CRGB color, uint16_t step);
+void effectRainbowKnightRiderImproved(CRGB* leds, uint8_t numLeds, uint16_t step);
+void effectDualKnightRiderImproved(CRGB* leds, uint8_t numLeds, CRGB color, uint16_t step);
+void effectDualRainbowKnightRiderImproved(CRGB* leds, uint8_t numLeds, uint16_t step);
 void setPreset(uint8_t preset);
 void handleSerialCommands();
 void printStatus();
@@ -612,6 +661,8 @@ void handleOTAError(int error);
 
 // LED Configuration functions
 void initializeLEDs();
+void initializeWhiteLEDs();
+void updateWhiteLEDs();
 void testLEDConfiguration();
 String getLEDTypeName(uint8_t type);
 String getColorOrderName(uint8_t order);
@@ -664,6 +715,7 @@ void handleStatus();
 String getStatusJSON();
 void handleLEDConfig();
 void handleLEDTest();
+void handleGetSettings();
 void sendJSONResponse(DynamicJsonDocument& doc);
 
 void setup() {
@@ -671,19 +723,37 @@ void setup() {
     Serial.println("ArkLights PEV Lighting System");
     Serial.println("==============================");
     
-    // Initialize filesystem
+    // ⚡ FAST BOOT: Initialize LEDs FIRST for immediate visual feedback
+    // Use default values if settings not loaded yet
+    initializeLEDs();
+    initializeWhiteLEDs();  // Initialize dedicated white LEDs
+
+#if WHITE_LED_TEST_MODE
+    Serial.println("⚠️ WHITE_LED_TEST_MODE enabled: blinking taillight white");
+    for (uint8_t i = 0; i < 3; i++) {
+        ledcWrite(WHITE_LED_PWM_CHANNEL_TAILLIGHT, 255); // On
+        delay(400);
+        ledcWrite(WHITE_LED_PWM_CHANNEL_TAILLIGHT, 0); // Off
+        delay(400);
+    }
+#endif
+    
+    // Show a simple "booting" pattern immediately
+    fillSolidWithColorOrder(headlight, headlightLedCount, CRGB::Blue, headlightLedType, headlightColorOrder);
+    fillSolidWithColorOrder(taillight, taillightLedCount, CRGB::Blue, taillightLedType, taillightColorOrder);
+    FastLED.setBrightness(64); // Low brightness for boot indicator
+    FastLED.show();
+    
+    // Initialize filesystem (can be slow)
     initFilesystem();
     
     // Load saved settings
     loadSettings();
     
-    // Test filesystem
-    testFilesystem();
+    // Skip testFilesystem() during boot - it's unnecessary and slow
+    // Can be called manually via serial command if needed
     
-    // Initialize LED strips early for visual debugging
-    initializeLEDs();
-    
-    // Initialize motion control
+    // Initialize motion control (I2C can be slow, but LEDs already showing)
     initMotionControl();
     
     // Start startup sequence if enabled
@@ -700,7 +770,7 @@ void setup() {
         fillSolidWithColorOrder(headlight, headlightLedCount, headlightColor, headlightLedType, headlightColorOrder);
         fillSolidWithColorOrder(taillight, taillightLedCount, taillightColor, taillightLedType, taillightColorOrder);
         FastLED.show();
-        delay(1000);
+        // Removed delay(1000) - no need to wait
     }
     
     Serial.printf("Headlight: %d LEDs on GPIO %d (Type: %s, Order: %s)\n", 
@@ -739,6 +809,17 @@ void setup() {
 }
 
 void loop() {
+    // Handle deferred NVS migration (non-blocking, happens once after boot)
+    if (nvsMigrationPending) {
+        Serial.println("🔄 Performing NVS migration in background...");
+        if (saveSettingsToNVS()) {
+            Serial.println("✅ Settings migrated to NVS (will survive OTA filesystem updates)");
+        } else {
+            Serial.println("⚠️ Failed to migrate settings to NVS");
+        }
+        nvsMigrationPending = false;
+    }
+    
     // Update startup sequence if active
     if (startupActive) {
         updateStartupSequence();
@@ -809,6 +890,9 @@ uint8_t getEffectSpeedMultiplier(uint8_t effect) {
         case FX_THEATER_CHASE:
         case FX_RUNNING_LIGHTS:
         case FX_COLOR_SWEEP:
+        case FX_RAINBOW_KNIGHT_RIDER:
+        case FX_DUAL_KNIGHT_RIDER:
+        case FX_DUAL_RAINBOW_KNIGHT_RIDER:
             return 1; // Sweep effects: normal speed (removed multiplier)
         default:
             return 1; // Other effects: normal speed
@@ -861,7 +945,9 @@ void blendLEDArrays(CRGB* target, CRGB* source1, CRGB* source2, uint8_t numLeds,
 }
 
 // Helper function to apply effect to LED array
-void applyEffectToArray(CRGB* leds, uint8_t numLeds, uint8_t effect, CRGB color, EffectTiming& timing, uint8_t ledType, uint8_t colorOrder) {
+void applyEffectToArray(CRGB* leds, uint8_t numLeds, uint8_t effect, CRGB color, EffectTiming& timing, uint8_t ledType, uint8_t colorOrder, CRGB backgroundColor, bool backgroundEnabled) {
+    effectBackgroundEnabled = backgroundEnabled;
+    effectBackgroundColor = backgroundColor;
     switch (effect) {
         case FX_SOLID:
             fillSolidWithColorOrder(leds, numLeds, color, ledType, colorOrder);
@@ -922,6 +1008,15 @@ void applyEffectToArray(CRGB* leds, uint8_t numLeds, uint8_t effect, CRGB color,
             break;
         case FX_COLOR_SWEEP:
             effectColorSweepImproved(leds, numLeds, color, timing.step);
+            break;
+        case FX_RAINBOW_KNIGHT_RIDER:
+            effectRainbowKnightRiderImproved(leds, numLeds, timing.step);
+            break;
+        case FX_DUAL_KNIGHT_RIDER:
+            effectDualKnightRiderImproved(leds, numLeds, color, timing.step);
+            break;
+        case FX_DUAL_RAINBOW_KNIGHT_RIDER:
+            effectDualRainbowKnightRiderImproved(leds, numLeds, timing.step);
             break;
     }
     // Apply color order conversion for RGBW LEDs (FX_SOLID already handles this)
@@ -1038,11 +1133,11 @@ void updateEffects() {
                     fillSolidWithColorOrder(newFrontTemp, newFrontCount, CRGB::White, newFrontLedType, newFrontColorOrder);
                 } else {
                     // Headlight effect
-                    applyEffectToArray(newFrontTemp, newFrontCount, headlightEffect, headlightColor, newFrontTiming, newFrontLedType, newFrontColorOrder);
+                    applyEffectToArray(newFrontTemp, newFrontCount, headlightEffect, headlightColor, newFrontTiming, newFrontLedType, newFrontColorOrder, headlightBackgroundColor, headlightBackgroundEnabled);
                 }
                 
                 // Apply back light effect (always taillight effect)
-                applyEffectToArray(newBackTemp, newBackCount, taillightEffect, taillightColor, newBackTiming, newBackLedType, newBackColorOrder);
+                applyEffectToArray(newBackTemp, newBackCount, taillightEffect, taillightColor, newBackTiming, newBackLedType, newBackColorOrder, taillightBackgroundColor, taillightBackgroundEnabled);
             }
             
             // Blend old and new for both headlight and taillight
@@ -1076,29 +1171,53 @@ void updateEffects() {
                     fillSolidWithColorOrder(frontLights, frontCount, CRGB::White, frontLedType, frontColorOrder);
                 } else {
                     // Headlight effect
-                    applyEffectToArray(frontLights, frontCount, headlightEffect, headlightColor, frontTiming, frontLedType, frontColorOrder);
+                    applyEffectToArray(frontLights, frontCount, headlightEffect, headlightColor, frontTiming, frontLedType, frontColorOrder, headlightBackgroundColor, headlightBackgroundEnabled);
                 }
             }
             
             if (backUpdate && backCount > 0) {
                 // Taillight always gets taillight effect
-                applyEffectToArray(backLights, backCount, taillightEffect, taillightColor, backTiming, backLedType, backColorOrder);
+                applyEffectToArray(backLights, backCount, taillightEffect, taillightColor, backTiming, backLedType, backColorOrder, taillightBackgroundColor, taillightBackgroundEnabled);
             }
         }
     } else {
         // Normal mode: effects apply to fixed headlight/taillight
         // Update headlight effect (only if timing allows)
         if (headlightUpdate) {
-            applyEffectToArray(headlight, headlightLedCount, headlightEffect, headlightColor, headlightTiming, headlightLedType, headlightColorOrder);
+            applyEffectToArray(headlight, headlightLedCount, headlightEffect, headlightColor, headlightTiming, headlightLedType, headlightColorOrder, headlightBackgroundColor, headlightBackgroundEnabled);
         }
         
         // Update taillight effect (only if timing allows)
         if (taillightUpdate) {
-            applyEffectToArray(taillight, taillightLedCount, taillightEffect, taillightColor, taillightTiming, taillightLedType, taillightColorOrder);
+            applyEffectToArray(taillight, taillightLedCount, taillightEffect, taillightColor, taillightTiming, taillightLedType, taillightColorOrder, taillightBackgroundColor, taillightBackgroundEnabled);
         }
     }
     
     FastLED.show();
+}
+
+CRGB getEffectBackgroundColor() {
+    return effectBackgroundEnabled ? effectBackgroundColor : CRGB::Black;
+}
+
+CRGB mixColors(const CRGB& base, const CRGB& added) {
+    if (base.r == 0 && base.g == 0 && base.b == 0) {
+        return added;
+    }
+    if (added.r == 0 && added.g == 0 && added.b == 0) {
+        return base;
+    }
+
+    CHSV baseHsv = rgb2hsv_approximate(base);
+    CHSV addedHsv = rgb2hsv_approximate(added);
+
+    uint16_t valueSum = baseHsv.value + addedHsv.value;
+    uint8_t weight = valueSum > 0 ? static_cast<uint8_t>((addedHsv.value * 255) / valueSum) : 128;
+    uint8_t blendedHue = blend8(baseHsv.hue, addedHsv.hue, weight);
+    uint8_t blendedSat = max(baseHsv.sat, addedHsv.sat);
+    uint8_t blendedVal = max(baseHsv.val, addedHsv.val);
+
+    return CHSV(blendedHue, blendedSat, blendedVal);
 }
 
 void effectBreath(CRGB* leds, uint8_t numLeds, CRGB color) {
@@ -1124,7 +1243,7 @@ void effectRainbow(CRGB* leds, uint8_t numLeds) {
 
 void effectChase(CRGB* leds, uint8_t numLeds, CRGB color) {
     uint8_t pos = effectStep % numLeds;
-    fill_solid(leds, numLeds, CRGB::Black);
+    fill_solid(leds, numLeds, getEffectBackgroundColor());
     leds[pos] = color;
     // Speed control: higher speed = faster movement
     uint8_t stepSize = map(effectSpeed, 0, 255, 1, 2); // Even slower - max 2 steps (was 3)
@@ -1138,13 +1257,13 @@ void effectBlinkRainbow(CRGB* leds, uint8_t numLeds) {
     if (blinkState) {
         effectRainbow(leds, numLeds);
     } else {
-        fill_solid(leds, numLeds, CRGB::Black);
+        fill_solid(leds, numLeds, getEffectBackgroundColor());
     }
 }
 
 void effectTwinkle(CRGB* leds, uint8_t numLeds, CRGB color) {
     // Set background
-    fill_solid(leds, numLeds, CRGB::Black);
+    fill_solid(leds, numLeds, getEffectBackgroundColor());
     
     // Calculate twinkle speed based on effectSpeed (0-255)
     uint8_t numTwinkles = map(effectSpeed, 0, 255, numLeds / 8, numLeds / 2);
@@ -1230,7 +1349,7 @@ void effectWave(CRGB* leds, uint8_t numLeds, CRGB color) {
             waveColor.nscale8(brightness);
             leds[i] = waveColor;
         } else {
-            leds[i] = CRGB::Black;
+            leds[i] = getEffectBackgroundColor();
         }
     }
 }
@@ -1341,7 +1460,7 @@ void effectStrobe(CRGB* leds, uint8_t numLeds, CRGB color) {
     if (strobeState) {
         fill_solid(leds, numLeds, color);
     } else {
-        fill_solid(leds, numLeds, CRGB::Black);
+        fill_solid(leds, numLeds, getEffectBackgroundColor());
     }
 }
 
@@ -1384,7 +1503,7 @@ void effectColorWipe(CRGB* leds, uint8_t numLeds, CRGB color) {
     uint8_t actualPos = forward ? wipePos : (numLeds * 2) - wipePos - 1;
     
     // Clear all LEDs
-    fill_solid(leds, numLeds, CRGB::Black);
+    fill_solid(leds, numLeds, getEffectBackgroundColor());
     
     // Fill up to position
     for (uint8_t i = 0; i <= actualPos && i < numLeds; i++) {
@@ -1402,7 +1521,7 @@ void effectTheaterChase(CRGB* leds, uint8_t numLeds, CRGB color) {
         if ((i + chaseStep) % 3 == 0) {
             leds[i] = color;
         } else {
-            leds[i] = CRGB::Black;
+            leds[i] = getEffectBackgroundColor();
         }
     }
 }
@@ -1414,7 +1533,7 @@ void effectRunningLights(CRGB* leds, uint8_t numLeds, CRGB color) {
     uint8_t runPos = (millis() / runSpeed) % numLeds;
     
     // Clear all LEDs
-    fill_solid(leds, numLeds, CRGB::Black);
+    fill_solid(leds, numLeds, getEffectBackgroundColor());
     
     // Create running light pattern
     for (uint8_t i = 0; i < 3; i++) {
@@ -1445,7 +1564,7 @@ void effectColorSweep(CRGB* leds, uint8_t numLeds, CRGB color) {
             sweepColor.nscale8(brightness);
             leds[i] = sweepColor;
         } else {
-            leds[i] = CRGB::Black;
+            leds[i] = getEffectBackgroundColor();
         }
     }
 }
@@ -1483,7 +1602,7 @@ void effectChaseImproved(CRGB* leds, uint8_t numLeds, CRGB color, uint16_t step)
     // Apply speed multiplier for faster movement
     uint8_t multiplier = getEffectSpeedMultiplier(FX_CHASE);
     uint8_t pos = (step * multiplier) % numLeds;
-    fill_solid(leds, numLeds, CRGB::Black);
+    fill_solid(leds, numLeds, getEffectBackgroundColor());
     leds[pos] = color;
 }
 
@@ -1494,14 +1613,14 @@ void effectBlinkRainbowImproved(CRGB* leds, uint8_t numLeds, uint16_t step) {
     if (blinkState) {
         effectRainbowImproved(leds, numLeds, step);
     } else {
-        fill_solid(leds, numLeds, CRGB::Black);
+        fill_solid(leds, numLeds, getEffectBackgroundColor());
     }
 }
 
 // Improved Twinkle Effect with consistent timing
 void effectTwinkleImproved(CRGB* leds, uint8_t numLeds, CRGB color, uint16_t step) {
     // Set background
-    fill_solid(leds, numLeds, CRGB::Black);
+    fill_solid(leds, numLeds, getEffectBackgroundColor());
     
     // Use step to determine number of twinkles (more consistent)
     uint8_t numTwinkles = 2 + (step % (numLeds / 4));
@@ -1588,7 +1707,7 @@ void effectWaveImproved(CRGB* leds, uint8_t numLeds, CRGB color, uint16_t step) 
             waveColor.nscale8(brightness);
             leds[i] = waveColor;
         } else {
-            leds[i] = CRGB::Black;
+            leds[i] = getEffectBackgroundColor();
         }
     }
 }
@@ -1730,7 +1849,7 @@ void effectStrobeImproved(CRGB* leds, uint8_t numLeds, CRGB color, uint16_t step
     if (strobeState) {
         fill_solid(leds, numLeds, color);
     } else {
-        fill_solid(leds, numLeds, CRGB::Black);
+        fill_solid(leds, numLeds, getEffectBackgroundColor());
     }
 }
 
@@ -1772,7 +1891,7 @@ void effectColorWipeImproved(CRGB* leds, uint8_t numLeds, CRGB color, uint16_t s
     uint8_t actualPos = forward ? wipePos : (numLeds * 2) - wipePos - 1;
     
     // Clear all LEDs
-    fill_solid(leds, numLeds, CRGB::Black);
+    fill_solid(leds, numLeds, getEffectBackgroundColor());
     
     // Fill up to position
     for (uint8_t i = 0; i <= actualPos && i < numLeds; i++) {
@@ -1791,7 +1910,7 @@ void effectTheaterChaseImproved(CRGB* leds, uint8_t numLeds, CRGB color, uint16_
         if ((i + chaseStep) % 3 == 0) {
             leds[i] = color;
         } else {
-            leds[i] = CRGB::Black;
+            leds[i] = getEffectBackgroundColor();
         }
     }
 }
@@ -1804,7 +1923,7 @@ void effectRunningLightsImproved(CRGB* leds, uint8_t numLeds, CRGB color, uint16
     uint8_t runPos = ((step * multiplier) / 2) % numLeds;
     
     // Clear all LEDs
-    fill_solid(leds, numLeds, CRGB::Black);
+    fill_solid(leds, numLeds, getEffectBackgroundColor());
     
     // Create running light pattern
     for (uint8_t i = 0; i < 3; i++) {
@@ -1836,8 +1955,172 @@ void effectColorSweepImproved(CRGB* leds, uint8_t numLeds, CRGB color, uint16_t 
             sweepColor.nscale8(brightness);
             leds[i] = sweepColor;
         } else {
-            leds[i] = CRGB::Black;
+            leds[i] = getEffectBackgroundColor();
         }
+    }
+}
+
+void effectRainbowKnightRiderImproved(CRGB* leds, uint8_t numLeds, uint16_t step) {
+    static bool lastForward = true;
+    static CRGB currentColor = CRGB::Red;
+
+    uint16_t trailLength = numLeds / 3;
+    if (trailLength < 3) trailLength = 3;
+    if (trailLength > 8) trailLength = 8;
+
+    uint16_t cycleLength = (numLeds + trailLength * 2) * 2;
+    uint16_t position = (step / 4) % cycleLength;
+
+    bool forward = (position < (numLeds + trailLength * 2));
+    int16_t scannerPos;
+    if (forward) {
+        scannerPos = (int16_t)position - trailLength;
+    } else {
+        scannerPos = (int16_t)(cycleLength - position) - trailLength;
+    }
+
+    if (forward != lastForward) {
+        currentColor = CHSV(random8(), 255, 255);
+        lastForward = forward;
+    }
+
+    fill_solid(leds, numLeds, getEffectBackgroundColor());
+
+    for (uint8_t i = 1; i <= trailLength; i++) {
+        int16_t trailPos = forward ? (scannerPos - i) : (scannerPos + i);
+        if (trailPos >= 0 && trailPos < numLeds) {
+            float fadeRatio = (float)i / trailLength;
+            uint8_t brightness = 255 * (1.0 - fadeRatio * fadeRatio);
+            CRGB trailColor;
+            trailColor.r = (currentColor.r * brightness) >> 8;
+            trailColor.g = (currentColor.g * brightness) >> 8;
+            trailColor.b = (currentColor.b * brightness) >> 8;
+            leds[trailPos] = trailColor;
+        }
+    }
+
+    if (scannerPos >= 0 && scannerPos < numLeds) {
+        leds[scannerPos] = currentColor;
+    }
+}
+
+void effectDualKnightRiderImproved(CRGB* leds, uint8_t numLeds, CRGB color, uint16_t step) {
+    CRGB secondaryColor = getEffectBackgroundColor();
+
+    uint16_t trailLength = numLeds;
+    if (trailLength < 4) trailLength = 4;
+    if (trailLength > 16) trailLength = 16;
+
+    uint16_t cycleLength = (numLeds + trailLength * 2) * 2;
+    uint16_t position = (step / 4) % cycleLength;
+
+    bool forward = (position < (numLeds + trailLength * 2));
+    bool oppositeForward = !forward;
+
+    int16_t primaryPos = forward
+        ? (int16_t)position - trailLength
+        : (int16_t)(cycleLength - position) - trailLength;
+
+    int16_t posMin = -static_cast<int16_t>(trailLength);
+    int16_t posMax = static_cast<int16_t>(numLeds - 1 + trailLength);
+    int16_t secondaryPos = posMin + posMax - primaryPos;
+
+    fill_solid(leds, numLeds, CRGB::Black);
+
+    for (uint8_t i = 1; i <= trailLength; i++) {
+        float fadeRatio = (float)i / trailLength;
+        uint8_t brightness = 255 * (1.0 - sqrtf(fadeRatio));
+
+        int16_t primaryTrail = forward ? (primaryPos - i) : (primaryPos + i);
+        if (primaryTrail >= 0 && primaryTrail < numLeds) {
+            CRGB trailColor;
+            trailColor.r = (color.r * brightness) >> 8;
+            trailColor.g = (color.g * brightness) >> 8;
+            trailColor.b = (color.b * brightness) >> 8;
+            leds[primaryTrail] = mixColors(leds[primaryTrail], trailColor);
+        }
+
+        int16_t secondaryTrail = oppositeForward ? (secondaryPos - i) : (secondaryPos + i);
+        if (secondaryTrail >= 0 && secondaryTrail < numLeds) {
+            CRGB trailColor;
+            trailColor.r = (secondaryColor.r * brightness) >> 8;
+            trailColor.g = (secondaryColor.g * brightness) >> 8;
+            trailColor.b = (secondaryColor.b * brightness) >> 8;
+            leds[secondaryTrail] = mixColors(leds[secondaryTrail], trailColor);
+        }
+    }
+
+    if (primaryPos >= 0 && primaryPos < numLeds) {
+        leds[primaryPos] = mixColors(leds[primaryPos], color);
+    }
+    if (secondaryPos >= 0 && secondaryPos < numLeds) {
+        leds[secondaryPos] = mixColors(leds[secondaryPos], secondaryColor);
+    }
+}
+
+void effectDualRainbowKnightRiderImproved(CRGB* leds, uint8_t numLeds, uint16_t step) {
+    static bool lastForward = true;
+    static bool lastOppositeForward = false;
+    static CRGB primaryColor = CHSV(0, 255, 255);
+    static CRGB secondaryColor = CHSV(160, 255, 255);
+
+    uint16_t trailLength = numLeds;
+    if (trailLength < 4) trailLength = 4;
+    if (trailLength > 16) trailLength = 16;
+
+    uint16_t cycleLength = (numLeds + trailLength * 2) * 2;
+    uint16_t position = (step / 4) % cycleLength;
+
+    bool forward = (position < (numLeds + trailLength * 2));
+    bool oppositeForward = !forward;
+
+    int16_t primaryPos = forward
+        ? (int16_t)position - trailLength
+        : (int16_t)(cycleLength - position) - trailLength;
+
+    int16_t posMin = -static_cast<int16_t>(trailLength);
+    int16_t posMax = static_cast<int16_t>(numLeds - 1 + trailLength);
+    int16_t secondaryPos = posMin + posMax - primaryPos;
+
+    if (forward != lastForward) {
+        primaryColor = CHSV(random8(), 255, 255);
+        lastForward = forward;
+    }
+    if (oppositeForward != lastOppositeForward) {
+        secondaryColor = CHSV(random8(), 255, 255);
+        lastOppositeForward = oppositeForward;
+    }
+
+    fill_solid(leds, numLeds, CRGB::Black);
+
+    for (uint8_t i = 1; i <= trailLength; i++) {
+        float fadeRatio = (float)i / trailLength;
+        uint8_t brightness = 255 * (1.0 - sqrtf(fadeRatio));
+
+        int16_t primaryTrail = forward ? (primaryPos - i) : (primaryPos + i);
+        if (primaryTrail >= 0 && primaryTrail < numLeds) {
+            CRGB trailColor;
+            trailColor.r = (primaryColor.r * brightness) >> 8;
+            trailColor.g = (primaryColor.g * brightness) >> 8;
+            trailColor.b = (primaryColor.b * brightness) >> 8;
+            leds[primaryTrail] = mixColors(leds[primaryTrail], trailColor);
+        }
+
+        int16_t secondaryTrail = oppositeForward ? (secondaryPos - i) : (secondaryPos + i);
+        if (secondaryTrail >= 0 && secondaryTrail < numLeds) {
+            CRGB trailColor;
+            trailColor.r = (secondaryColor.r * brightness) >> 8;
+            trailColor.g = (secondaryColor.g * brightness) >> 8;
+            trailColor.b = (secondaryColor.b * brightness) >> 8;
+            leds[secondaryTrail] = mixColors(leds[secondaryTrail], trailColor);
+        }
+    }
+
+    if (primaryPos >= 0 && primaryPos < numLeds) {
+        leds[primaryPos] = mixColors(leds[primaryPos], primaryColor);
+    }
+    if (secondaryPos >= 0 && secondaryPos < numLeds) {
+        leds[secondaryPos] = mixColors(leds[secondaryPos], secondaryColor);
     }
 }
 
@@ -2696,6 +2979,18 @@ void showParkEffect() {
             effectColorSweepImproved(headlight, headlightLedCount, parkHeadlightColor, headlightTiming.step);
             effectColorSweepImproved(taillight, taillightLedCount, parkTaillightColor, taillightTiming.step);
             break;
+        case FX_RAINBOW_KNIGHT_RIDER:
+            effectRainbowKnightRiderImproved(headlight, headlightLedCount, headlightTiming.step);
+            effectRainbowKnightRiderImproved(taillight, taillightLedCount, taillightTiming.step);
+            break;
+        case FX_DUAL_KNIGHT_RIDER:
+            effectDualKnightRiderImproved(headlight, headlightLedCount, parkHeadlightColor, headlightTiming.step);
+            effectDualKnightRiderImproved(taillight, taillightLedCount, parkTaillightColor, taillightTiming.step);
+            break;
+        case FX_DUAL_RAINBOW_KNIGHT_RIDER:
+            effectDualRainbowKnightRiderImproved(headlight, headlightLedCount, headlightTiming.step);
+            effectDualRainbowKnightRiderImproved(taillight, taillightLedCount, taillightTiming.step);
+            break;
     }
     
     // Apply color order conversion for RGBW LEDs in park mode (FX_SOLID already handles this)
@@ -3274,6 +3569,8 @@ void handleSerialCommands() {
             if (groupCode.length() == 6) {
                 isGroupMaster = true;
                 allowGroupJoin = true;
+                hasGroupMaster = true;
+                esp_wifi_get_mac(WIFI_IF_STA, groupMasterMac);
                 generateGroupCode();
                 Serial.printf("Group: Created with code %s\n", groupCode.c_str());
             } else {
@@ -3284,6 +3581,9 @@ void handleSerialCommands() {
             groupCode = command.substring(11);
             if (groupCode.length() == 6) {
                 isGroupMaster = false;
+                hasGroupMaster = false;
+                memset(groupMasterMac, 0, sizeof(groupMasterMac));
+                groupMemberCount = 0;
                 sendJoinRequest();
                 Serial.printf("Group: Attempting to join with code %s\n", groupCode.c_str());
             } else {
@@ -3295,6 +3595,8 @@ void handleSerialCommands() {
             isGroupMaster = false;
             allowGroupJoin = false;
             groupMemberCount = 0;
+            hasGroupMaster = false;
+            memset(groupMasterMac, 0, sizeof(groupMasterMac));
             Serial.println("Group: Left group");
         }
         else if (command == "group_allow_join") {
@@ -3312,12 +3614,12 @@ void handleSerialCommands() {
         }
         else if (command.startsWith("park_effect ")) {
             int effect = command.substring(12).toInt();
-            if (effect >= 0 && effect <= 19) {
+            if (effect >= 0 && effect <= 22) {
                 parkEffect = effect;
                 saveSettings();
                 Serial.printf("Park effect set to %d\n", effect);
             } else {
-                Serial.println("Invalid effect (0-19)");
+                Serial.println("Invalid effect (0-22)");
             }
         }
         else if (command.startsWith("park_speed ")) {
@@ -3424,8 +3726,8 @@ void printHelp() {
     Serial.println("  b<0-255>: Set brightness");
     Serial.println("  h<hex>: Set headlight color (e.g., hFF0000)");
     Serial.println("  t<hex>: Set taillight color (e.g., t00FF00)");
-    Serial.println("  eh<0-19>: Set headlight effect");
-    Serial.println("  et<0-19>: Set taillight effect");
+    Serial.println("  eh<0-22>: Set headlight effect");
+    Serial.println("  et<0-22>: Set taillight effect");
     Serial.println("  startup<0-5>: Set startup sequence");
     Serial.println("  test_startup: Test current startup sequence");
     Serial.println("");
@@ -3435,7 +3737,7 @@ void printHelp() {
     Serial.println("  motion_on/off: Enable/disable motion control");
     Serial.println("  blinker_on/off: Enable/disable auto blinkers");
     Serial.println("  park_on/off: Enable/disable park mode");
-    Serial.println("  park_effect <0-19>: Set park mode effect");
+    Serial.println("  park_effect <0-22>: Set park mode effect");
     Serial.println("  park_speed <0-255>: Set park mode effect speed");
     Serial.println("  park_brightness <0-255>: Set park mode brightness");
     Serial.println("  park_color headlight r,g,b: Set park headlight color");
@@ -3807,6 +4109,7 @@ void setupWebServer() {
     server.on("/api/status", HTTP_GET, handleStatus);
     server.on("/api/led-config", HTTP_POST, handleLEDConfig);
     server.on("/api/led-test", HTTP_POST, handleLEDTest);
+    server.on("/api/settings", HTTP_GET, handleGetSettings);
     server.on("/api/ota-upload", HTTP_POST, []() {
         server.send(200, "application/json", "{\"success\":true,\"message\":\"Upload complete\"}");
     }, handleOTAUpload);
@@ -4760,6 +5063,34 @@ void handleAPI() {
             #endif
         }
         
+        // Dedicated white LED control API
+        if (doc.containsKey("white_leds_enabled")) {
+            whiteLEDsEnabled = doc["white_leds_enabled"] | false;
+            updateWhiteLEDs(); // Update immediately
+            saveSettings(); // Auto-save
+            Serial.printf("💡 White LEDs: %s\n", whiteLEDsEnabled ? "enabled" : "disabled");
+        }
+        if (doc.containsKey("headlight_white_enabled")) {
+            headlightWhiteEnabled = doc["headlight_white_enabled"] | true;
+            updateWhiteLEDs(); // Update immediately
+            saveSettings(); // Auto-save
+        }
+        if (doc.containsKey("taillight_white_enabled")) {
+            taillightWhiteEnabled = doc["taillight_white_enabled"] | true;
+            updateWhiteLEDs(); // Update immediately
+            saveSettings(); // Auto-save
+        }
+        if (doc.containsKey("headlight_white_brightness")) {
+            headlightWhiteBrightness = doc["headlight_white_brightness"] | 255;
+            updateWhiteLEDs(); // Update immediately
+            saveSettings(); // Auto-save
+        }
+        if (doc.containsKey("taillight_white_brightness")) {
+            taillightWhiteBrightness = doc["taillight_white_brightness"] | 255;
+            updateWhiteLEDs(); // Update immediately
+            saveSettings(); // Auto-save
+        }
+        
         // OTA Update API
         if (doc.containsKey("otaUpdateURL")) {
             otaUpdateURL = doc["otaUpdateURL"].as<String>();
@@ -4798,6 +5129,26 @@ void handleAPI() {
                     taillightColor = CRGB((color >> 16) & 0xFF, (color >> 8) & 0xFF, color & 0xFF);
                     saveSettings(); // Auto-save
                 }
+        if (doc.containsKey("headlightBackgroundColor")) {
+            String colorHex = doc["headlightBackgroundColor"];
+            uint32_t color = strtol(colorHex.c_str(), NULL, 16);
+            headlightBackgroundColor = CRGB((color >> 16) & 0xFF, (color >> 8) & 0xFF, color & 0xFF);
+            saveSettings(); // Auto-save
+        }
+        if (doc.containsKey("taillightBackgroundColor")) {
+            String colorHex = doc["taillightBackgroundColor"];
+            uint32_t color = strtol(colorHex.c_str(), NULL, 16);
+            taillightBackgroundColor = CRGB((color >> 16) & 0xFF, (color >> 8) & 0xFF, color & 0xFF);
+            saveSettings(); // Auto-save
+        }
+        if (doc.containsKey("headlightBackgroundEnabled")) {
+            headlightBackgroundEnabled = doc["headlightBackgroundEnabled"];
+            saveSettings(); // Auto-save
+        }
+        if (doc.containsKey("taillightBackgroundEnabled")) {
+            taillightBackgroundEnabled = doc["taillightBackgroundEnabled"];
+            saveSettings(); // Auto-save
+        }
         if (doc.containsKey("headlightEffect")) {
             headlightEffect = doc["headlightEffect"];
             saveSettings(); // Auto-save
@@ -4837,6 +5188,8 @@ void handleAPI() {
                     groupCode = code;
                     isGroupMaster = true;
                     allowGroupJoin = true;
+                    hasGroupMaster = true;
+                    esp_wifi_get_mac(WIFI_IF_STA, groupMasterMac);
                     // Add self as a group member when creating a group
                     uint8_t mac[6];
                     esp_wifi_get_mac(WIFI_IF_STA, mac);
@@ -4848,6 +5201,9 @@ void handleAPI() {
                 if (code.length() == 6) {
                     groupCode = code;
                     isGroupMaster = false;
+                    hasGroupMaster = false;
+                    memset(groupMasterMac, 0, sizeof(groupMasterMac));
+                    groupMemberCount = 0;
                     sendJoinRequest();
                     Serial.printf("Group: Attempting to join with code %s\n", groupCode.c_str());
                 }
@@ -4856,6 +5212,8 @@ void handleAPI() {
                 isGroupMaster = false;
                 allowGroupJoin = false;
                 groupMemberCount = 0;
+                hasGroupMaster = false;
+                memset(groupMasterMac, 0, sizeof(groupMasterMac));
                 Serial.println("Group: Left group");
             } else if (action == "allow_join") {
                 allowGroupJoin = true;
@@ -4875,7 +5233,7 @@ void handleAPI() {
 }
 
 void handleStatus() {
-    DynamicJsonDocument doc(1024);
+    DynamicJsonDocument doc(2048);  // Increased size to ensure all fields fit
     doc["preset"] = currentPreset;
     doc["brightness"] = globalBrightness;
     doc["effectSpeed"] = effectSpeed;
@@ -4938,8 +5296,12 @@ void handleStatus() {
     doc["build_date"] = __DATE__ " " __TIME__;
     doc["apName"] = apName;
     doc["apPassword"] = apPassword;
-    doc["headlightColor"] = String(headlightColor.r, HEX) + String(headlightColor.g, HEX) + String(headlightColor.b, HEX);
-    doc["taillightColor"] = String(taillightColor.r, HEX) + String(taillightColor.g, HEX) + String(taillightColor.b, HEX);
+    doc["headlightColor"] = formatColorHex(headlightColor);
+    doc["taillightColor"] = formatColorHex(taillightColor);
+    doc["headlightBackgroundEnabled"] = headlightBackgroundEnabled;
+    doc["taillightBackgroundEnabled"] = taillightBackgroundEnabled;
+    doc["headlightBackgroundColor"] = formatColorHex(headlightBackgroundColor);
+    doc["taillightBackgroundColor"] = formatColorHex(taillightBackgroundColor);
     doc["headlightEffect"] = headlightEffect;
     doc["taillightEffect"] = taillightEffect;
     
@@ -4964,11 +5326,20 @@ void handleStatus() {
     doc["isGroupMaster"] = isGroupMaster;
     doc["groupMemberCount"] = groupMemberCount;
     doc["deviceName"] = deviceName;
+    doc["hasGroupMaster"] = hasGroupMaster;
+    doc["groupMasterMac"] = hasGroupMaster ? formatMacAddress(groupMasterMac) : "";
     
     // Bluetooth status
     doc["bluetoothEnabled"] = bluetoothEnabled;
     doc["bluetoothDeviceName"] = bluetoothDeviceName;
     doc["bluetoothConnected"] = deviceConnected;
+    
+    // White LED status
+    doc["white_leds_enabled"] = whiteLEDsEnabled;
+    doc["headlight_white_enabled"] = headlightWhiteEnabled;
+    doc["taillight_white_enabled"] = taillightWhiteEnabled;
+    doc["headlight_white_brightness"] = headlightWhiteBrightness;
+    doc["taillight_white_brightness"] = taillightWhiteBrightness;
     
     server.sendHeader("Access-Control-Allow-Origin", "*");
     sendJSONResponse(doc);
@@ -5052,8 +5423,20 @@ void handleLEDConfig() {
             Serial.println("LED configuration updated and applied!");
         }
         
+        // Return updated configuration in response so UI can verify
+        DynamicJsonDocument responseDoc(512);
+        responseDoc["status"] = "ok";
+        responseDoc["headlightLedCount"] = headlightLedCount;
+        responseDoc["taillightLedCount"] = taillightLedCount;
+        responseDoc["headlightLedType"] = headlightLedType;
+        responseDoc["taillightLedType"] = taillightLedType;
+        responseDoc["headlightColorOrder"] = headlightColorOrder;
+        responseDoc["taillightColorOrder"] = taillightColorOrder;
+        
         server.sendHeader("Access-Control-Allow-Origin", "*");
-        server.send(200, "application/json", "{\"status\":\"ok\"}");
+        String response;
+        serializeJson(responseDoc, response);
+        server.send(200, "application/json", response);
     } else {
         server.send(400, "application/json", "{\"error\":\"No data\"}");
     }
@@ -5063,6 +5446,33 @@ void handleLEDTest() {
     testLEDConfiguration();
     server.sendHeader("Access-Control-Allow-Origin", "*");
     server.send(200, "application/json", "{\"status\":\"test_complete\"}");
+}
+
+void handleGetSettings() {
+    // Try to get settings from NVS first (primary storage)
+    String settingsJson;
+    nvs.begin(NVS_NAMESPACE, true); // Open read-only
+    if (nvs.isKey("settings")) {
+        settingsJson = nvs.getString("settings");
+        nvs.end();
+        Serial.println("📄 Returning settings from NVS");
+    } else {
+        nvs.end();
+        // Fallback to SPIFFS
+        File file = SPIFFS.open("/settings.json", "r");
+        if (file) {
+            settingsJson = file.readString();
+            file.close();
+            Serial.println("📄 Returning settings from SPIFFS");
+        } else {
+            server.sendHeader("Access-Control-Allow-Origin", "*");
+            server.send(404, "application/json", "{\"error\":\"No settings found\"}");
+            return;
+        }
+    }
+    
+    server.sendHeader("Access-Control-Allow-Origin", "*");
+    server.send(200, "application/json", settingsJson);
 }
 
 void sendJSONResponse(DynamicJsonDocument& doc) {
@@ -5216,6 +5626,61 @@ void initializeLEDs() {
     Serial.printf("LED strips initialized successfully! Headlight: %d LEDs, Taillight: %d LEDs\n", headlightLedCount, taillightLedCount);
 }
 
+// Initialize dedicated white LEDs (AO3400 MOSFET control)
+void initializeWhiteLEDs() {
+    // Configure PWM channels for white LED control
+    // ESP32 LEDC: channel, frequency, resolution
+    ledcSetup(WHITE_LED_PWM_CHANNEL_HEADLIGHT, WHITE_LED_PWM_FREQ, WHITE_LED_PWM_RESOLUTION);
+    ledcSetup(WHITE_LED_PWM_CHANNEL_TAILLIGHT, WHITE_LED_PWM_FREQ, WHITE_LED_PWM_RESOLUTION);
+    
+    // Attach pins to PWM channels
+    ledcAttachPin(HEADLIGHT_WHITE_PIN, WHITE_LED_PWM_CHANNEL_HEADLIGHT);
+    ledcAttachPin(TAILLIGHT_WHITE_PIN, WHITE_LED_PWM_CHANNEL_TAILLIGHT);
+    
+    // Initialize to off (AO3400 is N-channel low-side)
+    // For PWM: 0 = off, 255 = fully on
+    ledcWrite(WHITE_LED_PWM_CHANNEL_HEADLIGHT, 0); // Off
+    ledcWrite(WHITE_LED_PWM_CHANNEL_TAILLIGHT, 0); // Off
+    
+    Serial.println("✅ White LEDs initialized (AO3400 MOSFET control)");
+    Serial.printf("   Headlight white: GPIO %d (Channel %d)\n", HEADLIGHT_WHITE_PIN, WHITE_LED_PWM_CHANNEL_HEADLIGHT);
+    Serial.printf("   Taillight white: GPIO %d (Channel %d)\n", TAILLIGHT_WHITE_PIN, WHITE_LED_PWM_CHANNEL_TAILLIGHT);
+}
+
+// Update white LED brightness based on settings
+void updateWhiteLEDs() {
+    if (!whiteLEDsEnabled) {
+        // Master disable: turn off both white LEDs
+        ledcWrite(WHITE_LED_PWM_CHANNEL_HEADLIGHT, 0); // Off
+        ledcWrite(WHITE_LED_PWM_CHANNEL_TAILLIGHT, 0); // Off
+        return;
+    }
+    
+    // Headlight white LED control
+    if (headlightWhiteEnabled) {
+        // Direct brightness: 0 = off, 255 = fully on
+        uint8_t headlightPwm = headlightWhiteBrightness;
+#if WHITE_LED_TEST_LIMIT_BRIGHTNESS > 0
+        headlightPwm = min(headlightPwm, (uint8_t)WHITE_LED_TEST_LIMIT_BRIGHTNESS);
+#endif
+        ledcWrite(WHITE_LED_PWM_CHANNEL_HEADLIGHT, headlightPwm);
+    } else {
+        ledcWrite(WHITE_LED_PWM_CHANNEL_HEADLIGHT, 0); // Off
+    }
+    
+    // Taillight white LED control
+    if (taillightWhiteEnabled) {
+        // Direct brightness: 0 = off, 255 = fully on
+        uint8_t taillightPwm = taillightWhiteBrightness;
+#if WHITE_LED_TEST_LIMIT_BRIGHTNESS > 0
+        taillightPwm = min(taillightPwm, (uint8_t)WHITE_LED_TEST_LIMIT_BRIGHTNESS);
+#endif
+        ledcWrite(WHITE_LED_PWM_CHANNEL_TAILLIGHT, taillightPwm);
+    } else {
+        ledcWrite(WHITE_LED_PWM_CHANNEL_TAILLIGHT, 0); // Off
+    }
+}
+
 void testLEDConfiguration() {
     Serial.println("Testing LED configuration...");
     
@@ -5275,7 +5740,9 @@ void initFilesystem() {
     }
     Serial.println("✅ SPIFFS Mount Success");
     
-    // List existing files for debugging
+    // Skip file listing during boot for faster startup
+    // Can be enabled for debugging by uncommenting:
+    /*
     File root = SPIFFS.open("/");
     File file = root.openNextFile();
     Serial.println("📁 Existing files:");
@@ -5283,6 +5750,7 @@ void initFilesystem() {
         Serial.printf("  %s (%d bytes)\n", file.name(), file.size());
         file = root.openNextFile();
     }
+    */
 }
 
 // Save all settings to filesystem
@@ -5298,6 +5766,14 @@ bool saveSettings() {
     doc["taillight_color_r"] = taillightColor.r;
     doc["taillight_color_g"] = taillightColor.g;
     doc["taillight_color_b"] = taillightColor.b;
+    doc["headlight_background_enabled"] = headlightBackgroundEnabled;
+    doc["taillight_background_enabled"] = taillightBackgroundEnabled;
+    doc["headlight_background_r"] = headlightBackgroundColor.r;
+    doc["headlight_background_g"] = headlightBackgroundColor.g;
+    doc["headlight_background_b"] = headlightBackgroundColor.b;
+    doc["taillight_background_r"] = taillightBackgroundColor.r;
+    doc["taillight_background_g"] = taillightBackgroundColor.g;
+    doc["taillight_background_b"] = taillightBackgroundColor.b;
     doc["global_brightness"] = globalBrightness;
     doc["effect_speed"] = effectSpeed;
     doc["current_preset"] = currentPreset;
@@ -5331,6 +5807,13 @@ bool saveSettings() {
     doc["braking_threshold"] = brakingThreshold;
     doc["braking_effect"] = brakingEffect;
     doc["braking_brightness"] = brakingBrightness;
+    
+    // White LED settings
+    doc["white_leds_enabled"] = whiteLEDsEnabled;
+    doc["headlight_white_enabled"] = headlightWhiteEnabled;
+    doc["taillight_white_enabled"] = taillightWhiteEnabled;
+    doc["headlight_white_brightness"] = headlightWhiteBrightness;
+    doc["taillight_white_brightness"] = taillightWhiteBrightness;
     
     // Park mode effect settings
     doc["park_effect"] = parkEffect;
@@ -5368,6 +5851,10 @@ bool saveSettings() {
     doc["isGroupMaster"] = isGroupMaster;
     doc["allowGroupJoin"] = allowGroupJoin;
     doc["deviceName"] = deviceName;
+    doc["hasGroupMaster"] = hasGroupMaster;
+    doc["groupMasterMac"] = hasGroupMaster ? formatMacAddress(groupMasterMac) : "";
+    doc["hasGroupMaster"] = hasGroupMaster;
+    doc["groupMasterMac"] = hasGroupMaster ? formatMacAddress(groupMasterMac) : "";
     
     // Calibration data
     doc["calibration_complete"] = calibrationComplete;
@@ -5442,6 +5929,14 @@ bool saveSettingsToNVS() {
     doc["taillight_color_r"] = taillightColor.r;
     doc["taillight_color_g"] = taillightColor.g;
     doc["taillight_color_b"] = taillightColor.b;
+    doc["headlight_background_enabled"] = headlightBackgroundEnabled;
+    doc["taillight_background_enabled"] = taillightBackgroundEnabled;
+    doc["headlight_background_r"] = headlightBackgroundColor.r;
+    doc["headlight_background_g"] = headlightBackgroundColor.g;
+    doc["headlight_background_b"] = headlightBackgroundColor.b;
+    doc["taillight_background_r"] = taillightBackgroundColor.r;
+    doc["taillight_background_g"] = taillightBackgroundColor.g;
+    doc["taillight_background_b"] = taillightBackgroundColor.b;
     doc["global_brightness"] = globalBrightness;
     doc["effect_speed"] = effectSpeed;
     doc["current_preset"] = currentPreset;
@@ -5475,6 +5970,13 @@ bool saveSettingsToNVS() {
     doc["braking_threshold"] = brakingThreshold;
     doc["braking_effect"] = brakingEffect;
     doc["braking_brightness"] = brakingBrightness;
+    
+    // White LED settings
+    doc["white_leds_enabled"] = whiteLEDsEnabled;
+    doc["headlight_white_enabled"] = headlightWhiteEnabled;
+    doc["taillight_white_enabled"] = taillightWhiteEnabled;
+    doc["headlight_white_brightness"] = headlightWhiteBrightness;
+    doc["taillight_white_brightness"] = taillightWhiteBrightness;
     
     // Park mode effect settings
     doc["park_effect"] = parkEffect;
@@ -5622,6 +6124,14 @@ bool loadSettings() {
     taillightColor.r = doc["taillight_color_r"] | 0;   // Default: black
     taillightColor.g = doc["taillight_color_g"] | 0;   // Default: black
     taillightColor.b = doc["taillight_color_b"] | 0;   // Default: black
+    headlightBackgroundEnabled = doc["headlight_background_enabled"] | false;
+    taillightBackgroundEnabled = doc["taillight_background_enabled"] | false;
+    headlightBackgroundColor.r = doc["headlight_background_r"] | 0;
+    headlightBackgroundColor.g = doc["headlight_background_g"] | 0;
+    headlightBackgroundColor.b = doc["headlight_background_b"] | 0;
+    taillightBackgroundColor.r = doc["taillight_background_r"] | 0;
+    taillightBackgroundColor.g = doc["taillight_background_g"] | 0;
+    taillightBackgroundColor.b = doc["taillight_background_b"] | 0;
     globalBrightness = doc["global_brightness"] | DEFAULT_BRIGHTNESS;
     effectSpeed = doc["effect_speed"] | 64;
     currentPreset = doc["current_preset"] | PRESET_STANDARD;
@@ -5655,6 +6165,13 @@ bool loadSettings() {
     brakingThreshold = doc["braking_threshold"] | -0.5;
     brakingEffect = doc["braking_effect"] | 0;
     brakingBrightness = doc["braking_brightness"] | 255;
+    
+    // Load white LED settings
+    whiteLEDsEnabled = doc["white_leds_enabled"] | false;
+    headlightWhiteEnabled = doc["headlight_white_enabled"] | true;
+    taillightWhiteEnabled = doc["taillight_white_enabled"] | true;
+    headlightWhiteBrightness = doc["headlight_white_brightness"] | 255;
+    taillightWhiteBrightness = doc["taillight_white_brightness"] | 255;
     
     // Load park mode effect settings
     parkEffect = doc["park_effect"] | FX_BREATH;
@@ -5695,6 +6212,15 @@ bool loadSettings() {
     isGroupMaster = doc["isGroupMaster"] | false;
     allowGroupJoin = doc["allowGroupJoin"] | false;
     deviceName = doc["deviceName"] | "";
+    String storedMasterMac = doc["groupMasterMac"] | "";
+    hasGroupMaster = doc["hasGroupMaster"] | false;
+    if (storedMasterMac.length() > 0 && parseMacAddress(storedMasterMac, groupMasterMac)) {
+        hasGroupMaster = true;
+    }
+    if (isGroupMaster) {
+        hasGroupMaster = true;
+        esp_wifi_get_mac(WIFI_IF_STA, groupMasterMac);
+    }
     Serial.printf("🚴 Loaded group settings: Code=%s, Master=%s, DeviceName=%s\n", 
                   groupCode.c_str(), isGroupMaster ? "Yes" : "No", deviceName.c_str());
     
@@ -5738,13 +6264,21 @@ bool loadSettings() {
     Serial.printf("Startup: %s (%dms), Enabled: %s\n", 
                   getStartupSequenceName(startupSequence).c_str(), startupDuration, startupEnabled ? "Yes" : "No");
     
-    // Migrate to NVS for future persistence
-    Serial.println("🔄 Migrating settings from SPIFFS to NVS...");
-    if (saveSettingsToNVS()) {
-        Serial.println("✅ Settings migrated to NVS (will survive OTA filesystem updates)");
+    // Defer NVS migration to after LEDs are shown (non-blocking)
+    // Check if migration is needed
+    nvs.begin(NVS_NAMESPACE, true); // Open read-only to check
+    bool nvsHasData = nvs.isKey("settings");
+    nvs.end();
+    
+    if (!nvsHasData) {
+        nvsMigrationPending = true;
+        Serial.println("🔄 NVS migration needed (will happen in background)");
     } else {
-        Serial.println("⚠️ Failed to migrate settings to NVS");
+        Serial.println("✅ NVS already has settings");
     }
+    
+    // Update white LEDs with loaded settings
+    updateWhiteLEDs();
     
     return true;
 }
@@ -5788,6 +6322,14 @@ bool loadSettingsFromNVS() {
     taillightColor.r = doc["taillight_color_r"] | 255;
     taillightColor.g = doc["taillight_color_g"] | 0;
     taillightColor.b = doc["taillight_color_b"] | 0;
+    headlightBackgroundEnabled = doc["headlight_background_enabled"] | false;
+    taillightBackgroundEnabled = doc["taillight_background_enabled"] | false;
+    headlightBackgroundColor.r = doc["headlight_background_r"] | 0;
+    headlightBackgroundColor.g = doc["headlight_background_g"] | 0;
+    headlightBackgroundColor.b = doc["headlight_background_b"] | 0;
+    taillightBackgroundColor.r = doc["taillight_background_r"] | 0;
+    taillightBackgroundColor.g = doc["taillight_background_g"] | 0;
+    taillightBackgroundColor.b = doc["taillight_background_b"] | 0;
     globalBrightness = doc["global_brightness"] | 128;
     effectSpeed = doc["effect_speed"] | 128;
     currentPreset = doc["current_preset"] | 0;
@@ -6031,6 +6573,9 @@ void sendESPNowData() {
     if (!enableESPNow || !useESPNowSync || espNowState != 1) {
         return;
     }
+    if (groupCode.length() > 0 && !isGroupMaster) {
+        return;
+    }
     
     // Only send if not in motion-based effects (blinkers, park mode)
     if (blinkerActive || parkModeActive) {
@@ -6056,6 +6601,14 @@ void sendESPNowData() {
     data.taillightColor[0] = taillightColor.r;
     data.taillightColor[1] = taillightColor.g;
     data.taillightColor[2] = taillightColor.b;
+    data.headlightBackgroundEnabled = headlightBackgroundEnabled;
+    data.taillightBackgroundEnabled = taillightBackgroundEnabled;
+    data.headlightBackgroundColor[0] = headlightBackgroundColor.r;
+    data.headlightBackgroundColor[1] = headlightBackgroundColor.g;
+    data.headlightBackgroundColor[2] = headlightBackgroundColor.b;
+    data.taillightBackgroundColor[0] = taillightBackgroundColor.r;
+    data.taillightBackgroundColor[1] = taillightBackgroundColor.g;
+    data.taillightBackgroundColor[2] = taillightBackgroundColor.b;
     data.preset = currentPreset;
     
     // Add timing coordination data
@@ -6135,9 +6688,15 @@ void handleGroupMessage(const uint8_t* mac_addr, const uint8_t* data, int len) {
     
     switch (groupData->messageType) {
         case 0: // Heartbeat
-            if (isGroupMaster) {
-                masterHeartbeat = millis();
-                Serial.printf("Group: Received heartbeat from %s\n", groupData->deviceName);
+            if (!isGroupMaster) {
+                if (!hasGroupMaster || memcmp(mac_addr, groupMasterMac, 6) == 0) {
+                    if (!hasGroupMaster) {
+                        memcpy(groupMasterMac, mac_addr, 6);
+                        hasGroupMaster = true;
+                    }
+                    masterHeartbeat = millis();
+                    Serial.printf("Group: Received heartbeat from %s\n", groupData->deviceName);
+                }
             }
             break;
             
@@ -6157,6 +6716,11 @@ void handleGroupMessage(const uint8_t* mac_addr, const uint8_t* data, int len) {
             if (!isGroupMaster) {
                 Serial.printf("Group: Join accepted by %s\n", groupData->deviceName);
                 isGroupMaster = false; // We're now a follower
+                if (!hasGroupMaster) {
+                    memcpy(groupMasterMac, mac_addr, 6);
+                    hasGroupMaster = true;
+                }
+                addGroupMember(mac_addr, groupData->deviceName);
             }
             break;
             
@@ -6313,6 +6877,8 @@ void checkMasterTimeout() {
 void becomeMaster() {
     isGroupMaster = true;
     masterHeartbeat = millis();
+    hasGroupMaster = true;
+    esp_wifi_get_mac(WIFI_IF_STA, groupMasterMac);
     Serial.println("Group: Now acting as master");
 }
 
@@ -6329,6 +6895,36 @@ String getDeviceMAC() {
     return String(mac[0], HEX) + ":" + String(mac[1], HEX) + ":" + 
            String(mac[2], HEX) + ":" + String(mac[3], HEX) + ":" + 
            String(mac[4], HEX) + ":" + String(mac[5], HEX);
+}
+
+String formatColorHex(const CRGB& color) {
+    char buffer[7];
+    snprintf(buffer, sizeof(buffer), "%02x%02x%02x", color.r, color.g, color.b);
+    return String(buffer);
+}
+
+String formatMacAddress(const uint8_t* mac) {
+    char buffer[18];
+    snprintf(buffer, sizeof(buffer), "%02x:%02x:%02x:%02x:%02x:%02x",
+             mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+    return String(buffer);
+}
+
+bool parseMacAddress(const String& macStr, uint8_t* outMac) {
+    if (macStr.length() != 17) {
+        return false;
+    }
+    int values[6];
+    int parsed = sscanf(macStr.c_str(), "%x:%x:%x:%x:%x:%x",
+                        &values[0], &values[1], &values[2],
+                        &values[3], &values[4], &values[5]);
+    if (parsed != 6) {
+        return false;
+    }
+    for (int i = 0; i < 6; i++) {
+        outMac[i] = static_cast<uint8_t>(values[i]);
+    }
+    return true;
 }
 
 // Helper function for saving UI files
