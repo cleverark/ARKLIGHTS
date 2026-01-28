@@ -25,7 +25,8 @@ fun MainControlScreen(
         TabRow(
             selectedTabIndex = when (currentPage) {
                 "main" -> 0
-                "settings" -> 1
+                "group" -> 1
+                "settings" -> 2
                 else -> 0
             }
         ) {
@@ -33,6 +34,11 @@ fun MainControlScreen(
                 selected = currentPage == "main",
                 onClick = { onPageChange("main") },
                 text = { Text("Main Controls") }
+            )
+            Tab(
+                selected = currentPage == "group",
+                onClick = { onPageChange("group") },
+                text = { Text("Group Sync") }
             )
             Tab(
                 selected = currentPage == "settings",
@@ -49,6 +55,7 @@ fun MainControlScreen(
         ) {
             when (currentPage) {
                 "main" -> MainControlsPage(viewModel = viewModel)
+                "group" -> GroupSyncPage(viewModel = viewModel)
                 "settings" -> SettingsPage(viewModel = viewModel)
             }
         }
@@ -70,9 +77,25 @@ fun MainControlsPage(
     ) {
         // Presets Section
         PresetsSection(
+            deviceStatus = deviceStatus,
             onPresetSelected = { preset ->
                 scope.launch {
                     viewModel.setPreset(preset)
+                }
+            },
+            onSavePreset = { name ->
+                scope.launch {
+                    viewModel.savePreset(name)
+                }
+            },
+            onRenamePreset = { index, name ->
+                scope.launch {
+                    viewModel.updatePreset(index, name)
+                }
+            },
+            onDeletePreset = { index ->
+                scope.launch {
+                    viewModel.deletePreset(index)
                 }
             }
         )
@@ -89,6 +112,21 @@ fun MainControlsPage(
                 scope.launch {
                     viewModel.setHeadlightEffect(effect)
                 }
+            },
+            onBackgroundEnabledChange = { enabled ->
+                scope.launch {
+                    viewModel.setHeadlightBackgroundEnabled(enabled)
+                }
+            },
+            onBackgroundColorChange = { color ->
+                scope.launch {
+                    viewModel.setHeadlightBackgroundColor(color)
+                }
+            },
+            onHeadlightModeChange = { mode ->
+                scope.launch {
+                    viewModel.setHeadlightMode(mode)
+                }
             }
         )
         
@@ -103,6 +141,16 @@ fun MainControlsPage(
             onEffectChange = { effect ->
                 scope.launch {
                     viewModel.setTaillightEffect(effect)
+                }
+            },
+            onBackgroundEnabledChange = { enabled ->
+                scope.launch {
+                    viewModel.setTaillightBackgroundEnabled(enabled)
+                }
+            },
+            onBackgroundColorChange = { color ->
+                scope.launch {
+                    viewModel.setTaillightBackgroundColor(color)
                 }
             }
         )
@@ -154,6 +202,51 @@ fun MainControlsPage(
                 scope.launch {
                     viewModel.setMotionSensitivity(sensitivity)
                 }
+            },
+            onDirectionBasedLighting = { enabled ->
+                scope.launch {
+                    viewModel.setDirectionBasedLighting(enabled)
+                }
+            },
+            onForwardAccelThresholdChange = { threshold ->
+                scope.launch {
+                    viewModel.setForwardAccelThreshold(threshold)
+                }
+            },
+            onBrakingEnabled = { enabled ->
+                scope.launch {
+                    viewModel.setBrakingEnabled(enabled)
+                }
+            },
+            onBrakingEffectChange = { effect ->
+                scope.launch {
+                    viewModel.setBrakingEffect(effect)
+                }
+            },
+            onBrakingThresholdChange = { threshold ->
+                scope.launch {
+                    viewModel.setBrakingThreshold(threshold)
+                }
+            },
+            onBrakingBrightnessChange = { brightness ->
+                scope.launch {
+                    viewModel.setBrakingBrightness(brightness)
+                }
+            },
+            onRgbwWhiteModeChange = { mode ->
+                scope.launch {
+                    viewModel.setRgbwWhiteMode(mode)
+                }
+            },
+            onManualBlinker = { direction ->
+                scope.launch {
+                    viewModel.setManualBlinker(direction)
+                }
+            },
+            onManualBrake = { enabled ->
+                scope.launch {
+                    viewModel.setManualBrake(enabled)
+                }
             }
         )
         
@@ -174,6 +267,79 @@ fun MainControlsPage(
         ) {
             Text("Disconnect")
         }
+    }
+}
+
+@Composable
+fun GroupSyncPage(
+    viewModel: ArkLightsViewModel
+) {
+    val deviceStatus by viewModel.deviceStatus.collectAsState()
+    val scope = rememberCoroutineScope()
+
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(16.dp),
+        verticalArrangement = Arrangement.spacedBy(16.dp)
+    ) {
+        ESPNowConfigurationSection(
+            deviceStatus = deviceStatus,
+            onESPNowEnabled = { enabled ->
+                scope.launch {
+                    viewModel.setESPNowEnabled(enabled)
+                }
+            },
+            onESPNowSync = { enabled ->
+                scope.launch {
+                    viewModel.setESPNowSync(enabled)
+                }
+            },
+            onESPNowChannelChange = { channel ->
+                scope.launch {
+                    viewModel.setESPNowChannel(channel)
+                }
+            }
+        )
+
+        GroupManagementSection(
+            deviceStatus = deviceStatus,
+            onDeviceNameChange = { name ->
+                scope.launch {
+                    viewModel.setDeviceName(name)
+                }
+            },
+            onCreateGroup = { code ->
+                scope.launch {
+                    viewModel.createGroup(code)
+                }
+            },
+            onJoinGroup = { code ->
+                scope.launch {
+                    viewModel.joinGroup(code)
+                }
+            },
+            onScanJoinGroup = {
+                scope.launch {
+                    viewModel.scanJoinGroup()
+                }
+            },
+            onLeaveGroup = {
+                scope.launch {
+                    viewModel.leaveGroup()
+                }
+            },
+            onAllowGroupJoin = {
+                scope.launch {
+                    viewModel.allowGroupJoin()
+                }
+            },
+            onBlockGroupJoin = {
+                scope.launch {
+                    viewModel.blockGroupJoin()
+                }
+            }
+        )
     }
 }
 
@@ -325,61 +491,6 @@ fun SettingsPage(
             onApplyWiFiConfig = { name, password ->
                 scope.launch {
                     viewModel.applyWiFiConfig(name, password)
-                }
-            }
-        )
-        
-        // ESPNow Configuration Section
-        ESPNowConfigurationSection(
-            deviceStatus = deviceStatus,
-            onESPNowEnabled = { enabled ->
-                scope.launch {
-                    viewModel.setESPNowEnabled(enabled)
-                }
-            },
-            onESPNowSync = { enabled ->
-                scope.launch {
-                    viewModel.setESPNowSync(enabled)
-                }
-            },
-            onESPNowChannelChange = { channel ->
-                scope.launch {
-                    viewModel.setESPNowChannel(channel)
-                }
-            }
-        )
-        
-        // Group Management Section
-        GroupManagementSection(
-            deviceStatus = deviceStatus,
-            onDeviceNameChange = { name ->
-                scope.launch {
-                    viewModel.setDeviceName(name)
-                }
-            },
-            onCreateGroup = { code ->
-                scope.launch {
-                    viewModel.createGroup(code)
-                }
-            },
-            onJoinGroup = { code ->
-                scope.launch {
-                    viewModel.joinGroup(code)
-                }
-            },
-            onLeaveGroup = {
-                scope.launch {
-                    viewModel.leaveGroup()
-                }
-            },
-            onAllowGroupJoin = {
-                scope.launch {
-                    viewModel.allowGroupJoin()
-                }
-            },
-            onBlockGroupJoin = {
-                scope.launch {
-                    viewModel.blockGroupJoin()
                 }
             }
         )

@@ -1,4 +1,6 @@
 // ArkLights PEV Control - JavaScript Functions
+let lastStatusCache = null;
+let devicePresets = [];
 
 // Page Navigation Functions
 function showPage(pageName) {
@@ -31,6 +33,79 @@ function setPreset(preset) {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ preset: preset })
+    }).then(() => updateStatus());
+}
+
+function renderPresets() {
+    const list = document.getElementById('presetsList');
+    if (!list) return;
+    list.innerHTML = '';
+    if (!devicePresets || devicePresets.length === 0) {
+        const empty = document.createElement('div');
+        empty.style.color = '#bbb';
+        empty.textContent = 'No presets available';
+        list.appendChild(empty);
+        return;
+    }
+    devicePresets.forEach((preset, index) => {
+        const row = document.createElement('div');
+        row.style.display = 'flex';
+        row.style.gap = '6px';
+        row.style.alignItems = 'center';
+
+        const applyBtn = document.createElement('button');
+        applyBtn.className = 'preset-btn';
+        applyBtn.textContent = preset.name || `Preset ${index + 1}`;
+        applyBtn.onclick = () => setPreset(index);
+
+        const editBtn = document.createElement('button');
+        editBtn.className = 'btn btn-secondary';
+        editBtn.textContent = 'Edit';
+        editBtn.onclick = () => editCustomPreset(index);
+
+        const deleteBtn = document.createElement('button');
+        deleteBtn.className = 'btn btn-danger';
+        deleteBtn.textContent = 'Remove';
+        deleteBtn.onclick = () => deleteCustomPreset(index);
+
+        row.appendChild(applyBtn);
+        row.appendChild(editBtn);
+        row.appendChild(deleteBtn);
+        list.appendChild(row);
+    });
+}
+
+function saveCustomPreset() {
+    const name = prompt('Preset name:', 'My Preset');
+    if (!name) return;
+    fetch('/api', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ presetAction: 'save', presetName: name })
+    }).then(() => updateStatus());
+}
+
+function editCustomPreset(index) {
+    const preset = devicePresets[index];
+    if (!preset) return;
+    const name = prompt('Edit preset name:', preset.name || '');
+    if (!name) return;
+    const confirmed = confirm('Overwrite preset with current settings?');
+    if (!confirmed) return;
+    fetch('/api', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ presetAction: 'update', presetIndex: index, presetName: name })
+    }).then(() => updateStatus());
+}
+
+function deleteCustomPreset(index) {
+    const confirmed = confirm('Remove this preset?');
+    if (!confirmed) return;
+    fetch('/api', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ presetAction: 'delete', presetIndex: index })
     }).then(() => updateStatus());
 }
 
@@ -191,6 +266,22 @@ function setBrakingBrightness(value) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ braking_brightness: parseInt(value) })
     });
+}
+
+function setManualBlinker(direction) {
+    fetch('/api', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ manualBlinker: direction })
+    }).then(() => updateStatus());
+}
+
+function setManualBrake(enabled) {
+    fetch('/api', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ manualBrake: enabled })
+    }).then(() => updateStatus());
 }
 
 function setMotionSensitivity(value) {
@@ -636,6 +727,11 @@ function updateStatus() {
     fetch('/api/status')
         .then(response => response.json())
         .then(data => {
+            lastStatusCache = data;
+            if (Array.isArray(data.presets)) {
+                devicePresets = data.presets;
+                renderPresets();
+            }
             document.getElementById('status').innerHTML = 
                 `Preset: ${data.preset}<br>` +
                 `Brightness: ${data.brightness}<br>` +
@@ -1110,17 +1206,19 @@ function setDeviceName(name) {
 
 function createGroup() {
     const code = document.getElementById('groupCodeInput').value;
-    if (code.length !== 6 || !/^\d{6}$/.test(code)) {
-        alert('Please enter a valid 6-digit code');
+    if (code.length > 0 && (code.length !== 6 || !/^\d{6}$/.test(code))) {
+        alert('Please enter a valid 6-digit code or leave it blank');
         return;
     }
     
     fetch('/api', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ 
+        body: JSON.stringify(code.length > 0 ? {
             groupAction: 'create',
             groupCode: code
+        } : {
+            groupAction: 'create'
         })
     }).then(() => {
         document.getElementById('groupCodeInput').value = '';
@@ -1148,6 +1246,21 @@ function joinGroup() {
     }).then(() => {
         document.getElementById('groupCodeInput').value = '';
         // Add a small delay to ensure the backend has processed the request
+        setTimeout(() => {
+            updateStatus();
+        }, 500);
+    });
+}
+
+function scanJoinGroup() {
+    fetch('/api', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ 
+            groupAction: 'scan_join'
+        })
+    }).then(() => {
+        document.getElementById('groupCodeInput').value = '';
         setTimeout(() => {
             updateStatus();
         }, 500);

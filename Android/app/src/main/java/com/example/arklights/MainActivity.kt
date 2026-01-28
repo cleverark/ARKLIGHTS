@@ -19,6 +19,7 @@ import androidx.core.content.ContextCompat
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.arklights.bluetooth.BluetoothService
 import com.example.arklights.api.ArkLightsApiService
+import com.example.arklights.data.DeviceStore
 import com.example.arklights.ui.screens.ArkLightsApp
 import com.example.arklights.ui.theme.ARKLightsTheme
 
@@ -26,6 +27,7 @@ class MainActivity : ComponentActivity() {
     
     private lateinit var bluetoothService: BluetoothService
     private lateinit var apiService: ArkLightsApiService
+    private lateinit var deviceStore: DeviceStore
     
     private val requestPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
@@ -43,6 +45,7 @@ class MainActivity : ComponentActivity() {
         // Initialize services
         bluetoothService = BluetoothService(this)
         apiService = ArkLightsApiService(bluetoothService)
+        deviceStore = DeviceStore(this)
         
         // Request permissions
         requestPermissions()
@@ -53,6 +56,7 @@ class MainActivity : ComponentActivity() {
                     ArkLightsApp(
                         bluetoothService = bluetoothService,
                         apiService = apiService,
+                        deviceStore = deviceStore,
                         modifier = Modifier.padding(innerPadding)
                     )
                 }

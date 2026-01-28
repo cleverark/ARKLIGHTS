@@ -21,9 +21,13 @@ object LEDEffects {
     const val STROBE = 14
     const val LARSON_SCANNER = 15
     const val COLOR_WIPE = 16
+    const val RAINBOW_WIPE = 23
     const val THEATER_CHASE = 17
     const val RUNNING_LIGHTS = 18
     const val COLOR_SWEEP = 19
+    const val RAINBOW_KNIGHT_RIDER = 20
+    const val DUAL_KNIGHT_RIDER = 21
+    const val DUAL_RAINBOW_KNIGHT_RIDER = 22
     
     val effectNames = mapOf(
         SOLID to "Solid",
@@ -43,9 +47,13 @@ object LEDEffects {
         STROBE to "Strobe",
         LARSON_SCANNER to "Larson Scanner",
         COLOR_WIPE to "Color Wipe",
+        RAINBOW_WIPE to "Rainbow Wipe",
         THEATER_CHASE to "Theater Chase",
         RUNNING_LIGHTS to "Running Lights",
-        COLOR_SWEEP to "Color Sweep"
+        COLOR_SWEEP to "Color Sweep",
+        RAINBOW_KNIGHT_RIDER to "Rainbow Knight Rider",
+        DUAL_KNIGHT_RIDER to "Dual Knight Rider",
+        DUAL_RAINBOW_KNIGHT_RIDER to "Dual Rainbow Knight Rider"
     )
 }
 
@@ -121,12 +129,20 @@ data class LEDControlRequest(
     val effectSpeed: Int? = null,
     val headlightColor: String? = null,
     val taillightColor: String? = null,
+    val headlightBackgroundEnabled: Boolean? = null,
+    val taillightBackgroundEnabled: Boolean? = null,
+    val headlightBackgroundColor: String? = null,
+    val taillightBackgroundColor: String? = null,
+    val headlight_mode: Int? = null,
     val headlightEffect: Int? = null,
     val taillightEffect: Int? = null,
+    val direction_based_lighting: Boolean? = null,
+    val forward_accel_threshold: Double? = null,
     val startup_sequence: Int? = null,
     val startup_duration: Int? = null,
     val testStartup: Boolean? = null,
     val testParkMode: Boolean? = null,
+    val testLEDs: Boolean? = null,
     
     // Motion Control
     val motion_enabled: Boolean? = null,
@@ -140,6 +156,14 @@ data class LEDControlRequest(
     val park_accel_noise_threshold: Double? = null,
     val park_gyro_noise_threshold: Double? = null,
     val impact_threshold: Double? = null,
+    val braking_enabled: Boolean? = null,
+    val braking_threshold: Double? = null,
+    val braking_effect: Int? = null,
+    val braking_brightness: Int? = null,
+    val white_leds_enabled: Boolean? = null,
+    val rgbw_white_mode: Int? = null,
+    val manualBlinker: String? = null,
+    val manualBrake: Boolean? = null,
     
     // Park Mode Settings
     val park_effect: Int? = null,
@@ -170,7 +194,10 @@ data class LEDControlRequest(
     // Group Management
     val deviceName: String? = null,
     val groupAction: String? = null,
-    val groupCode: String? = null
+    val groupCode: String? = null,
+    val presetAction: String? = null,
+    val presetName: String? = null,
+    val presetIndex: Int? = null
 )
 
 @Serializable
@@ -183,68 +210,102 @@ data class LEDConfigRequest(
     val taillightColorOrder: Int
 )
 
+@Serializable
+data class OtaStatus(
+    val ota_update_url: String = "",
+    val ota_in_progress: Boolean = false,
+    val ota_progress: Int = 0,
+    val ota_status: String = "Ready",
+    val ota_error: String? = null
+)
+
 // API Response Models
 @Serializable
 data class LEDStatus(
-    val preset: Int,
-    val brightness: Int,
-    val effectSpeed: Int,
-    val startup_sequence: Int,
-    val startup_sequence_name: String,
-    val startup_duration: Int,
-    val motion_enabled: Boolean,
-    val blinker_enabled: Boolean,
-    val park_mode_enabled: Boolean,
-    val impact_detection_enabled: Boolean,
-    val motion_sensitivity: Double,
-    val blinker_delay: Int,
-    val blinker_timeout: Int,
-    val park_stationary_time: Int,
-    val park_accel_noise_threshold: Double,
-    val park_gyro_noise_threshold: Double,
-    val impact_threshold: Double,
-    val park_effect: Int,
-    val park_effect_speed: Int,
-    val park_brightness: Int,
-    val park_headlight_color_r: Int,
-    val park_headlight_color_g: Int,
-    val park_headlight_color_b: Int,
-    val park_taillight_color_r: Int,
-    val park_taillight_color_g: Int,
-    val park_taillight_color_b: Int,
-    val blinker_active: Boolean,
-    val blinker_direction: Int,
-    val park_mode_active: Boolean,
-    val calibration_complete: Boolean,
-    val calibration_mode: Boolean,
-    val calibration_step: Int,
-    val apName: String,
-    val apPassword: String,
-    val headlightColor: String,
-    val taillightColor: String,
-    val headlightEffect: Int,
-    val taillightEffect: Int,
-    val headlightLedCount: Int,
-    val taillightLedCount: Int,
-    val headlightLedType: Int,
-    val taillightLedType: Int,
-    val headlightColorOrder: Int,
-    val taillightColorOrder: Int,
-    val enableESPNow: Boolean,
-    val useESPNowSync: Boolean,
-    val espNowChannel: Int,
-    val espNowStatus: String,
-    val espNowPeerCount: Int,
-    val espNowLastSend: String,
-    val groupCode: String,
-    val isGroupMaster: Boolean,
-    val groupMemberCount: Int,
-    val deviceName: String,
-    val ota_status: String,
-    val ota_progress: Int,
-    val ota_error: String?,
-    val ota_in_progress: Boolean,
-    val build_date: String
+    val preset: Int = 0,
+    val presetCount: Int = 0,
+    val presets: List<PresetInfo> = emptyList(),
+    val brightness: Int = 128,
+    val effectSpeed: Int = 64,
+    val startup_sequence: Int = 0,
+    val startup_sequence_name: String = "None",
+    val startup_duration: Int = 3000,
+    val motion_enabled: Boolean = false,
+    val blinker_enabled: Boolean = false,
+    val park_mode_enabled: Boolean = false,
+    val impact_detection_enabled: Boolean = false,
+    val direction_based_lighting: Boolean = false,
+    val headlight_mode: Int = 0,
+    val forward_accel_threshold: Double = 0.3,
+    val motion_sensitivity: Double = 1.0,
+    val blinker_delay: Int = 300,
+    val blinker_timeout: Int = 2000,
+    val park_stationary_time: Int = 2000,
+    val park_accel_noise_threshold: Double = 0.1,
+    val park_gyro_noise_threshold: Double = 0.5,
+    val impact_threshold: Double = 3.0,
+    val braking_enabled: Boolean = false,
+    val braking_active: Boolean = false,
+    val braking_threshold: Double = -0.5,
+    val braking_effect: Int = 0,
+    val braking_brightness: Int = 255,
+    val white_leds_enabled: Boolean = false,
+    val rgbw_white_mode: Int = 0,
+    val park_effect: Int = 0,
+    val park_effect_speed: Int = 64,
+    val park_brightness: Int = 128,
+    val park_headlight_color_r: Int = 0,
+    val park_headlight_color_g: Int = 0,
+    val park_headlight_color_b: Int = 255,
+    val park_taillight_color_r: Int = 0,
+    val park_taillight_color_g: Int = 0,
+    val park_taillight_color_b: Int = 255,
+    val blinker_active: Boolean = false,
+    val blinker_direction: Int = 0,
+    val manual_blinker_active: Boolean = false,
+    val manual_brake_active: Boolean = false,
+    val park_mode_active: Boolean = false,
+    val calibration_complete: Boolean = false,
+    val calibration_mode: Boolean = false,
+    val calibration_step: Int = 0,
+    val apName: String = "ARKLIGHTS-AP",
+    val apPassword: String = "float420",
+    val headlightColor: String = "ffffff",
+    val taillightColor: String = "ff0000",
+    val headlightBackgroundEnabled: Boolean = false,
+    val taillightBackgroundEnabled: Boolean = false,
+    val headlightBackgroundColor: String = "000000",
+    val taillightBackgroundColor: String = "000000",
+    val headlightEffect: Int = 0,
+    val taillightEffect: Int = 0,
+    val headlightLedCount: Int = 20,
+    val taillightLedCount: Int = 20,
+    val headlightLedType: Int = 0,
+    val taillightLedType: Int = 0,
+    val headlightColorOrder: Int = 0,
+    val taillightColorOrder: Int = 0,
+    val enableESPNow: Boolean = false,
+    val useESPNowSync: Boolean = false,
+    val espNowChannel: Int = 1,
+    val espNowStatus: String = "Initializing",
+    val espNowPeerCount: Int = 0,
+    val espNowLastSend: String = "Never",
+    val groupCode: String = "",
+    val isGroupMaster: Boolean = false,
+    val hasGroupMaster: Boolean = false,
+    val groupMasterMac: String = "",
+    val groupMemberCount: Int = 0,
+    val deviceName: String = "ArkLights Device",
+    val ota_status: String = "Ready",
+    val ota_progress: Int = 0,
+    val ota_error: String? = null,
+    val ota_in_progress: Boolean = false,
+    val build_date: String = ""
+)
+
+@Serializable
+data class PresetInfo(
+    val name: String = ""
 )
 
 @Serializable

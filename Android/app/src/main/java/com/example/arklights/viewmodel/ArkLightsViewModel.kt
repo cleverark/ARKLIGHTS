@@ -12,13 +12,19 @@ import android.bluetooth.BluetoothDevice
 
 class ArkLightsViewModel(
     private val bluetoothService: BluetoothService,
-    private val apiService: ArkLightsApiService
+    private val apiService: ArkLightsApiService,
+    private val deviceStore: DeviceStore
 ) : ViewModel() {
     
     // Connection state
     val connectionState = bluetoothService.connectionState
     val discoveredDevices = bluetoothService.discoveredDevices
     val errorMessage = bluetoothService.errorMessage
+
+    val savedDevices: StateFlow<List<SavedDevice>> = deviceStore.savedDevices
+        .stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
+    val lastDeviceAddress: StateFlow<String?> = deviceStore.lastDeviceAddress
+        .stateIn(viewModelScope, SharingStarted.Eagerly, null)
     
     // API state
     val isLoading = apiService.isLoading
@@ -27,6 +33,7 @@ class ArkLightsViewModel(
     // Device status
     private val _deviceStatus = MutableStateFlow<LEDStatus?>(null)
     val deviceStatus: StateFlow<LEDStatus?> = _deviceStatus.asStateFlow()
+    private var cachedPresets: List<PresetInfo> = emptyList()
     
     // UI state
     private val _currentPage = MutableStateFlow("main")
@@ -40,6 +47,15 @@ class ArkLightsViewModel(
         viewModelScope.launch {
             connectionState.collect { state ->
                 if (state == ConnectionState.CONNECTED) {
+                    val connectedDevice = bluetoothService.getCurrentDevice()
+                    if (connectedDevice != null) {
+                        val name = try {
+                            connectedDevice.name ?: "ArkLights Device"
+                        } catch (e: SecurityException) {
+                            "ArkLights Device"
+                        }
+                        deviceStore.saveDevice(name, connectedDevice.address)
+                    }
                     refreshStatus()
                     // Start periodic status updates
                     startStatusUpdates()
@@ -69,7 +85,17 @@ class ArkLightsViewModel(
     }
     
     suspend fun connectToDevice(device: BluetoothDevice): Boolean {
+        _selectedDevice.value = device
         return bluetoothService.connectToDevice(device)
+    }
+
+    suspend fun connectToSavedDevice(address: String): Boolean {
+        val device = bluetoothService.getRemoteDevice(address) ?: return false
+        return connectToDevice(device)
+    }
+
+    suspend fun removeSavedDevice(address: String) {
+        deviceStore.removeDevice(address)
     }
     
     suspend fun disconnect(): Boolean {
@@ -79,7 +105,21 @@ class ArkLightsViewModel(
     suspend fun refreshStatus() {
         val status = apiService.getStatus()
         if (status != null) {
-            _deviceStatus.value = status
+            val resolvedPresets = if (status.presets.isNotEmpty()) {
+                cachedPresets = status.presets
+                status.presets
+            } else {
+                cachedPresets
+            }
+            val resolvedPresetCount = if (status.presetCount > 0) {
+                status.presetCount
+            } else {
+                resolvedPresets.size
+            }
+            _deviceStatus.value = status.copy(
+                presets = resolvedPresets,
+                presetCount = resolvedPresetCount
+            )
         }
     }
     
@@ -112,9 +152,29 @@ class ArkLightsViewModel(
         apiService.setHeadlightColor(color)
         refreshStatus()
     }
+
+    suspend fun setHeadlightBackgroundEnabled(enabled: Boolean) {
+        apiService.setHeadlightBackgroundEnabled(enabled)
+        refreshStatus()
+    }
+
+    suspend fun setHeadlightBackgroundColor(color: String) {
+        apiService.setHeadlightBackgroundColor(color)
+        refreshStatus()
+    }
     
     suspend fun setTaillightColor(color: String) {
         apiService.setTaillightColor(color)
+        refreshStatus()
+    }
+
+    suspend fun setTaillightBackgroundEnabled(enabled: Boolean) {
+        apiService.setTaillightBackgroundEnabled(enabled)
+        refreshStatus()
+    }
+
+    suspend fun setTaillightBackgroundColor(color: String) {
+        apiService.setTaillightBackgroundColor(color)
         refreshStatus()
     }
     
@@ -127,10 +187,25 @@ class ArkLightsViewModel(
         apiService.setTaillightEffect(effect)
         refreshStatus()
     }
+
+    suspend fun setHeadlightMode(mode: Int) {
+        apiService.setHeadlightMode(mode)
+        refreshStatus()
+    }
     
     // Motion Control Methods
     suspend fun setMotionEnabled(enabled: Boolean) {
         apiService.setMotionEnabled(enabled)
+        refreshStatus()
+    }
+
+    suspend fun setDirectionBasedLighting(enabled: Boolean) {
+        apiService.setDirectionBasedLighting(enabled)
+        refreshStatus()
+    }
+
+    suspend fun setForwardAccelThreshold(threshold: Double) {
+        apiService.setForwardAccelThreshold(threshold)
         refreshStatus()
     }
     
@@ -146,6 +221,54 @@ class ArkLightsViewModel(
     
     suspend fun setImpactDetectionEnabled(enabled: Boolean) {
         apiService.setImpactDetectionEnabled(enabled)
+        refreshStatus()
+    }
+
+    suspend fun setBrakingEnabled(enabled: Boolean) {
+        apiService.setBrakingEnabled(enabled)
+        refreshStatus()
+    }
+
+    suspend fun setBrakingThreshold(threshold: Double) {
+        apiService.setBrakingThreshold(threshold)
+        refreshStatus()
+    }
+
+    suspend fun setBrakingEffect(effect: Int) {
+        apiService.setBrakingEffect(effect)
+        refreshStatus()
+    }
+
+    suspend fun setBrakingBrightness(brightness: Int) {
+        apiService.setBrakingBrightness(brightness)
+        refreshStatus()
+    }
+
+    suspend fun setRgbwWhiteMode(mode: Int) {
+        apiService.setRgbwWhiteMode(mode)
+        refreshStatus()
+    }
+
+    suspend fun startOtaViaBle(url: String): Boolean {
+        return apiService.startOtaViaBle(url)
+    }
+
+    suspend fun getOtaStatus(): OtaStatus? {
+        return apiService.getOtaStatus()
+    }
+
+    suspend fun setWhiteLEDsEnabled(enabled: Boolean) {
+        apiService.setWhiteLEDsEnabled(enabled)
+        refreshStatus()
+    }
+
+    suspend fun setManualBlinker(direction: String) {
+        apiService.setManualBlinker(direction)
+        refreshStatus()
+    }
+
+    suspend fun setManualBrake(enabled: Boolean) {
+        apiService.setManualBrake(enabled)
         refreshStatus()
     }
     
@@ -288,13 +411,18 @@ class ArkLightsViewModel(
         refreshStatus()
     }
     
-    suspend fun createGroup(code: String) {
+    suspend fun createGroup(code: String?) {
         apiService.createGroup(code)
         refreshStatus()
     }
     
     suspend fun joinGroup(code: String) {
         apiService.joinGroup(code)
+        refreshStatus()
+    }
+
+    suspend fun scanJoinGroup() {
+        apiService.scanJoinGroup()
         refreshStatus()
     }
     
@@ -310,6 +438,21 @@ class ArkLightsViewModel(
     
     suspend fun blockGroupJoin() {
         apiService.blockGroupJoin()
+        refreshStatus()
+    }
+
+    suspend fun savePreset(name: String) {
+        apiService.savePreset(name)
+        refreshStatus()
+    }
+
+    suspend fun updatePreset(index: Int, name: String) {
+        apiService.updatePreset(index, name)
+        refreshStatus()
+    }
+
+    suspend fun deletePreset(index: Int) {
+        apiService.deletePreset(index)
         refreshStatus()
     }
     

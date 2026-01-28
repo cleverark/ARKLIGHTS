@@ -19,12 +19,14 @@ fun DeviceDiscoveryScreen(
 ) {
     val scope = rememberCoroutineScope()
     val discoveredDevices by viewModel.discoveredDevices.collectAsState()
+    val savedDevices by viewModel.savedDevices.collectAsState()
+    val lastDeviceAddress by viewModel.lastDeviceAddress.collectAsState()
     var pairedDevices by remember { mutableStateOf<List<BluetoothDevice>>(emptyList()) }
     var isScanning by remember { mutableStateOf(false) }
     
     LaunchedEffect(Unit) {
         // Load paired devices on first launch
-        pairedDevices.toMutableList().addAll(viewModel.getPairedDevices())
+        pairedDevices = viewModel.getPairedDevices()
     }
     
     Column(
@@ -38,6 +40,40 @@ fun DeviceDiscoveryScreen(
         )
         
         Spacer(modifier = Modifier.height(16.dp))
+
+        if (savedDevices.isNotEmpty()) {
+            Text(
+                text = "Saved Devices",
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.Bold
+            )
+
+            Spacer(modifier = Modifier.height(8.dp))
+
+            LazyColumn(
+                modifier = Modifier.fillMaxWidth(),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                items(savedDevices) { device ->
+                    SavedDeviceItem(
+                        device = device,
+                        isLastConnected = device.address == lastDeviceAddress,
+                        onConnect = {
+                            scope.launch {
+                                viewModel.connectToSavedDevice(device.address)
+                            }
+                        },
+                        onForget = {
+                            scope.launch {
+                                viewModel.removeSavedDevice(device.address)
+                            }
+                        }
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.height(16.dp))
+        }
         
         // Scan Controls
         Row(
@@ -137,6 +173,56 @@ fun DeviceDiscoveryScreen(
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
+        }
+    }
+}
+
+@Composable
+fun SavedDeviceItem(
+    device: com.example.arklights.data.SavedDevice,
+    isLastConnected: Boolean,
+    onConnect: () -> Unit,
+    onForget: () -> Unit
+) {
+    Card(
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(16.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Column(
+                modifier = Modifier.weight(1f)
+            ) {
+                Text(
+                    text = device.name,
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold
+                )
+                Text(
+                    text = device.address,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                if (isLastConnected) {
+                    Text(
+                        text = "Last connected",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                }
+            }
+
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Button(onClick = onConnect) {
+                    Text("Connect")
+                }
+                OutlinedButton(onClick = onForget) {
+                    Text("Forget")
+                }
+            }
         }
     }
 }

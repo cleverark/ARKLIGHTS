@@ -64,16 +64,6 @@ struct CRGBW {
 #define TAILLIGHT_CLOCK_PIN 4  // For APA102/LPD8806
 #define DEFAULT_BRIGHTNESS 128
 
-// Dedicated white LED control pins (AO3400 MOSFET gates)
-#define HEADLIGHT_WHITE_PIN 1  // A1/D1 - Controls headlight white LEDs via MOSFET
-#define TAILLIGHT_WHITE_PIN 0  // A0/D0 - Controls taillight white LEDs via MOSFET
-#define WHITE_LED_PWM_FREQ 1000  // PWM frequency in Hz
-#define WHITE_LED_PWM_RESOLUTION 8  // 8-bit resolution (0-255)
-#define WHITE_LED_PWM_CHANNEL_HEADLIGHT 0
-#define WHITE_LED_PWM_CHANNEL_TAILLIGHT 1
-#define WHITE_LED_TEST_MODE 0  // Set to 1 to blink taillight white on boot
-#define WHITE_LED_TEST_LIMIT_BRIGHTNESS 0  // 0=off, else cap brightness (e.g. 26 ≈ 10%)
-
 // LED Configuration (can be changed via web UI)
 uint8_t headlightLedCount = 11;
 uint8_t taillightLedCount = 11;
@@ -107,6 +97,7 @@ bool enableESPNow = true;
 bool useESPNowSync = true;
 uint8_t espNowChannel = 1;
 uint8_t espNowState = 0; // 0=uninit, 1=on, 2=error
+int espNowLastError = 0;
 
 // Group Ride Management
 bool isGroupMaster = false;
@@ -116,12 +107,16 @@ String deviceName = ""; // User-defined device name
 uint32_t masterHeartbeat = 0; // Last master heartbeat
 const uint32_t MASTER_TIMEOUT = 5000; // 5 seconds without master = become master
 const uint32_t HEARTBEAT_INTERVAL = 1000; // Send heartbeat every 1 second
+bool autoJoinOnHeartbeat = false; // Auto-join first group heartbeat
+bool joinInProgress = false; // Waiting to join a group
+uint32_t lastJoinRequest = 0;
+const uint32_t JOIN_RETRY_INTERVAL = 1000; // Retry join request every 1 second
 
 // ESPNow Broadcast Address
 uint8_t espNowBroadcastAddress[] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
 
 // ESPNow Data Structures
-struct ESPNowLEDData {
+struct __attribute__((packed)) ESPNowLEDData {
     uint8_t magic = 'A'; // 'A' for ArkLights
     uint8_t packetNum = 0;
     uint8_t totalPackets = 1;
@@ -143,7 +138,7 @@ struct ESPNowLEDData {
 };
 
 // Group Management Data Structure
-struct ESPNowGroupData {
+struct __attribute__((packed)) ESPNowGroupData {
     uint8_t magic = 'G'; // 'G' for Group
     uint8_t messageType; // 0=heartbeat, 1=join_request, 2=join_accept, 3=join_reject, 4=master_election
     char groupCode[7];   // 6-digit group code + null terminator
@@ -164,6 +159,59 @@ struct ESPNowPeer {
 bool deviceConnected = false;
 bool oldDeviceConnected = false;
 void processBLEHTTPRequest(String request);
+void appendBleRequestChunk(const String& chunk);
+bool consumeBleRequest(String& requestOut);
+String getStatusJSON();
+void startOTAUpdate(String url);
+struct BleFrame;
+
+// BLE framed protocol helpers
+uint16_t crc16Ccitt(const uint8_t* data, size_t length);
+bool tryExtractBleFrame(std::string& buffer, BleFrame& frame);
+void sendBleFrame(uint8_t type, uint8_t seq, uint8_t flags, const uint8_t* payload, uint16_t length);
+void sendBleAck(uint8_t seq);
+void sendBleError(uint8_t seq, const String& message);
+String getOtaStatusJSON();
+
+// BLE request buffering/queueing
+String bleRequestBuffer = "";
+int bleRequestBodyLength = -1;
+String blePendingJson = "";
+bool blePendingApply = false;
+portMUX_TYPE blePendingMutex = portMUX_INITIALIZER_UNLOCKED;
+constexpr uint8_t BLE_REQUEST_QUEUE_SIZE = 4;
+String bleRequestQueue[BLE_REQUEST_QUEUE_SIZE];
+volatile uint8_t bleRequestQueueHead = 0;
+volatile uint8_t bleRequestQueueTail = 0;
+volatile uint8_t bleRequestQueueCount = 0;
+portMUX_TYPE bleRequestQueueMutex = portMUX_INITIALIZER_UNLOCKED;
+
+// BLE framed protocol
+constexpr uint8_t BLE_FRAME_MAGIC0 = 0xA7;
+constexpr uint8_t BLE_FRAME_MAGIC1 = 0x1C;
+constexpr uint8_t BLE_FRAME_VERSION = 1;
+constexpr uint8_t BLE_FRAME_FLAG_ACK_REQUIRED = 0x01;
+constexpr uint8_t BLE_FRAME_HEADER_SIZE = 8;
+constexpr uint8_t BLE_FRAME_CRC_SIZE = 2;
+
+enum BleFrameType : uint8_t {
+    BLE_MSG_SETTINGS_JSON = 0x01,
+    BLE_MSG_STATUS_REQUEST = 0x02,
+    BLE_MSG_STATUS_RESPONSE = 0x03,
+    BLE_MSG_OTA_START = 0x04,
+    BLE_MSG_OTA_STATUS = 0x05,
+    BLE_MSG_ACK = 0x7E,
+    BLE_MSG_ERROR = 0x7F
+};
+
+struct BleFrame {
+    uint8_t type = 0;
+    uint8_t seq = 0;
+    uint8_t flags = 0;
+    std::string payload;
+};
+
+std::string bleRxBuffer;
 
 // BLE Server Callbacks
 class MyServerCallbacks: public BLEServerCallbacks {
@@ -183,13 +231,80 @@ class MyCallbacks: public BLECharacteristicCallbacks {
       std::string rxValue = pCharacteristic->getValue();
       
       if (rxValue.length() > 0) {
-        String request = String(rxValue.c_str());
-        Serial.printf("BLE received: %s\n", request.c_str());
-        
-        // Check if it's an HTTP request
-        if (request.startsWith("GET ") || request.startsWith("POST ")) {
-          // Process HTTP request over BLE
-          processBLEHTTPRequest(request);
+        bleRxBuffer.append(rxValue);
+        BleFrame frame;
+        while (tryExtractBleFrame(bleRxBuffer, frame)) {
+          if (frame.type == BLE_MSG_SETTINGS_JSON) {
+            if (frame.payload.empty()) {
+              sendBleError(frame.seq, "Empty settings payload");
+              continue;
+            }
+
+            bool canApply = false;
+            portENTER_CRITICAL(&blePendingMutex);
+            if (!blePendingApply) {
+              blePendingApply = true;
+              blePendingJson = String(
+                  reinterpret_cast<const char*>(frame.payload.data()),
+                  frame.payload.length()
+              );
+              canApply = true;
+            }
+            portEXIT_CRITICAL(&blePendingMutex);
+
+            if (canApply && (frame.flags & BLE_FRAME_FLAG_ACK_REQUIRED)) {
+              sendBleAck(frame.seq);
+            } else if (!canApply) {
+              sendBleError(frame.seq, "Busy");
+            }
+          } else if (frame.type == BLE_MSG_STATUS_REQUEST) {
+            if (frame.flags & BLE_FRAME_FLAG_ACK_REQUIRED) {
+              sendBleAck(frame.seq);
+            }
+            String statusJson = getStatusJSON();
+            sendBleFrame(
+                BLE_MSG_STATUS_RESPONSE,
+                frame.seq,
+                0,
+                reinterpret_cast<const uint8_t*>(statusJson.c_str()),
+                statusJson.length()
+            );
+          } else if (frame.type == BLE_MSG_OTA_START) {
+            if (frame.flags & BLE_FRAME_FLAG_ACK_REQUIRED) {
+              sendBleAck(frame.seq);
+            }
+            if (!frame.payload.empty()) {
+              String url = String(
+                  reinterpret_cast<const char*>(frame.payload.data()),
+                  frame.payload.length()
+              );
+              startOTAUpdate(url);
+            }
+            String otaStatusJson = getOtaStatusJSON();
+            sendBleFrame(
+                BLE_MSG_OTA_STATUS,
+                frame.seq,
+                0,
+                reinterpret_cast<const uint8_t*>(otaStatusJson.c_str()),
+                otaStatusJson.length()
+            );
+          } else if (frame.type == BLE_MSG_OTA_STATUS) {
+            if (frame.flags & BLE_FRAME_FLAG_ACK_REQUIRED) {
+              sendBleAck(frame.seq);
+            }
+            String otaStatusJson = getOtaStatusJSON();
+            sendBleFrame(
+                BLE_MSG_OTA_STATUS,
+                frame.seq,
+                0,
+                reinterpret_cast<const uint8_t*>(otaStatusJson.c_str()),
+                otaStatusJson.length()
+            );
+          } else if (frame.type == BLE_MSG_ACK) {
+            // No-op for device
+          } else {
+            sendBleError(frame.seq, "Unknown message");
+          }
         }
       }
     }
@@ -222,6 +337,7 @@ String bluetoothDeviceName = "ARKLIGHTS-AP";
 #define FX_STROBE 14
 #define FX_LARSON_SCANNER 15
 #define FX_COLOR_WIPE 16
+#define FX_RAINBOW_WIPE 23
 #define FX_THEATER_CHASE 17
 #define FX_RUNNING_LIGHTS 18
 #define FX_COLOR_SWEEP 19
@@ -234,6 +350,7 @@ String bluetoothDeviceName = "ARKLIGHTS-AP";
 #define PRESET_NIGHT 1
 #define PRESET_PARTY 2
 #define PRESET_STEALTH 3
+#define MAX_PRESETS 16
 
 // Startup Sequence IDs
 #define STARTUP_NONE 0
@@ -246,6 +363,8 @@ String bluetoothDeviceName = "ARKLIGHTS-AP";
 // LED strips (dynamic size) - Use CRGB for all LED types
 CRGB* headlight;
 CRGB* taillight;
+CLEDController* headlightController = nullptr;
+CLEDController* taillightController = nullptr;
 
 // System state
 uint8_t globalBrightness = DEFAULT_BRIGHTNESS;
@@ -254,6 +373,23 @@ uint8_t headlightEffect = FX_SOLID;
 uint8_t taillightEffect = FX_SOLID;
 CRGB headlightColor = CRGB::White;
 CRGB taillightColor = CRGB::Red;
+
+struct PresetConfig {
+    char name[21];
+    uint8_t brightness;
+    uint8_t effectSpeed;
+    uint8_t headlightEffect;
+    uint8_t taillightEffect;
+    uint8_t headlightColor[3];
+    uint8_t taillightColor[3];
+    uint8_t headlightBackgroundEnabled;
+    uint8_t taillightBackgroundEnabled;
+    uint8_t headlightBackgroundColor[3];
+    uint8_t taillightBackgroundColor[3];
+};
+
+PresetConfig presets[MAX_PRESETS];
+uint8_t presetCount = 0;
 bool headlightBackgroundEnabled = false;
 bool taillightBackgroundEnabled = false;
 CRGB headlightBackgroundColor = CRGB::Black;
@@ -262,12 +398,10 @@ bool effectBackgroundEnabled = false;
 CRGB effectBackgroundColor = CRGB::Black;
 uint8_t effectSpeed = 64; // Speed control (0-255, higher = faster) - Default to slower speed
 
-// Dedicated white LED control (AO3400 MOSFET gates)
-bool whiteLEDsEnabled = false;  // Master enable/disable for white LEDs
-bool headlightWhiteEnabled = true;  // Individual headlight white LED control
-bool taillightWhiteEnabled = true;  // Individual taillight white LED control
-uint8_t headlightWhiteBrightness = 255;  // 0-255 brightness for headlight white LEDs
-uint8_t taillightWhiteBrightness = 255;  // 0-255 brightness for taillight white LEDs
+// RGBW white channel control (for SK6812 RGBW strips)
+// 0 = Off, 1 = Exact White, 2 = Boosted White, 3 = Max Brightness
+uint8_t rgbwWhiteMode = 0;
+bool whiteLEDsEnabled = false;  // Compatibility flag (true when mode != 0)
 
 // Startup sequence settings
 uint8_t startupSequence = STARTUP_POWER_ON;
@@ -325,6 +459,7 @@ unsigned long lastMotionUpdate = 0;
 unsigned long blinkerStartTime = 0;
 unsigned long parkStartTime = 0;
 unsigned long lastImpactTime = 0;
+bool manualBlinkerActive = false;
 
 // Direction detection state
 bool directionBasedLighting = false;
@@ -341,6 +476,7 @@ float directionFadeProgress = 0.0;  // 0.0 to 1.0 for fade transition
 // Braking detection state
 bool brakingEnabled = false;  // Default to disabled - user must enable via UI
 bool brakingActive = false;
+bool manualBrakeActive = false;
 float brakingThreshold = -0.5;  // G-force deceleration threshold (negative = deceleration)
 const unsigned long BRAKING_SUSTAIN_TIME = 200;  // ms deceleration must be sustained before triggering
 unsigned long brakingDetectedTime = 0;
@@ -390,7 +526,26 @@ struct MotionData {
 ESPNowPeer espNowPeers[10]; // Max 10 peers
 uint8_t espNowPeerCount = 0;
 uint32_t lastESPNowSend = 0;
-const uint32_t ESPNOW_SEND_INTERVAL = 100; // Send every 100ms
+const uint32_t ESPNOW_SEND_INTERVAL = 100; // Legacy interval (unused for group sync)
+const uint32_t ESPNOW_SYNC_MIN_INTERVAL = 200; // Min delay between sync bursts
+const uint32_t ESPNOW_SYNC_IDLE_INTERVAL = 1000; // Keepalive when no changes
+
+struct ESPNowSyncState {
+    uint8_t brightness = 0;
+    uint8_t headlightEffect = 0;
+    uint8_t taillightEffect = 0;
+    uint8_t effectSpeed = 0;
+    uint8_t headlightColor[3] = {0, 0, 0};
+    uint8_t taillightColor[3] = {0, 0, 0};
+    uint8_t headlightBackgroundEnabled = 0;
+    uint8_t taillightBackgroundEnabled = 0;
+    uint8_t headlightBackgroundColor[3] = {0, 0, 0};
+    uint8_t taillightBackgroundColor[3] = {0, 0, 0};
+    uint8_t preset = 0;
+};
+
+ESPNowSyncState lastSyncState;
+bool hasLastSyncState = false;
 
 // Group Management
 struct GroupMember {
@@ -453,17 +608,30 @@ bool parseMacAddress(const String& macStr, uint8_t* outMac);
 String formatColorHex(const CRGB& color);
 
 void espNowReceiveCallback(const uint8_t *mac_addr, const uint8_t *data, int len) {
-    // Only process if ESPNow sync is enabled
-    if (!useESPNowSync) return;
+    // Only process if ESPNow is enabled
+    if (!enableESPNow) return;
     
     // Check if it's a group management packet
-    if (len >= sizeof(ESPNowGroupData) && data[0] == 'G') {
+    if (data[0] == 'G') {
+        if (len != sizeof(ESPNowGroupData)) {
+            Serial.println("Group: Invalid packet size");
+            return;
+        }
         handleGroupMessage(mac_addr, data, len);
         return;
     }
     
     // Check if it's an ArkLights packet
-    if (len < sizeof(ESPNowLEDData) || data[0] != 'A') {
+    if (data[0] != 'A') {
+        return;
+    }
+    if (len != sizeof(ESPNowLEDData)) {
+        Serial.println("ESPNow: Invalid packet size");
+        return;
+    }
+
+    // Only process LED sync when enabled
+    if (!useESPNowSync) {
         return;
     }
     
@@ -471,7 +639,7 @@ void espNowReceiveCallback(const uint8_t *mac_addr, const uint8_t *data, int len
     
     // Verify checksum
     uint8_t calculatedChecksum = 0;
-    for (int i = 0; i < len - 1; i++) {
+    for (int i = 0; i < (int)sizeof(ESPNowLEDData) - 1; i++) {
         calculatedChecksum ^= data[i];
     }
     
@@ -480,12 +648,7 @@ void espNowReceiveCallback(const uint8_t *mac_addr, const uint8_t *data, int len
         return;
     }
     
-    // Check if this is a recent packet (within 5 seconds)
     uint32_t currentTime = millis();
-    if (currentTime - receivedData->syncTimestamp > 5000) {
-        Serial.println("ESPNow: Packet too old");
-        return;
-    }
     
     Serial.println("ESPNow: Received LED data from peer");
     
@@ -516,25 +679,18 @@ void espNowReceiveCallback(const uint8_t *mac_addr, const uint8_t *data, int len
         taillightBackgroundColor = CRGB(receivedData->taillightBackgroundColor[0], receivedData->taillightBackgroundColor[1], receivedData->taillightBackgroundColor[2]);
         currentPreset = receivedData->preset;
         
-        // Sync timing for coordinated effects
-        if (receivedData->syncTimestamp > 0) {
-            // Calculate timing offset and sync step counters
-            uint32_t timeOffset = millis() - receivedData->syncTimestamp;
-            
-            // Sync step counters based on master timing
-            headlightTiming.step = receivedData->masterStep + (timeOffset / headlightTiming.frameTime);
-            taillightTiming.step = receivedData->masterStep + (timeOffset / taillightTiming.frameTime);
-            
-            // Adjust speed for different strip lengths
-            if (receivedData->stripLength > 0) {
-                // Normalize speed based on strip length difference
-                uint8_t maxLength = (headlightLedCount > taillightLedCount) ? headlightLedCount : taillightLedCount;
-                uint8_t lengthRatio = (maxLength * 100) / receivedData->stripLength;
-                effectSpeed = constrain(effectSpeed * lengthRatio / 100, 0, 255);
-            }
-            
-            Serial.printf("ESPNow: Synced timing - Master step: %d, Time offset: %dms\n", 
-                         receivedData->masterStep, timeOffset);
+        // Sync timing for coordinated effects (ignore timestamps)
+        if (receivedData->masterStep > 0) {
+            headlightTiming.step = receivedData->masterStep;
+            taillightTiming.step = receivedData->masterStep;
+        }
+        
+        // Adjust speed for different strip lengths
+        if (receivedData->stripLength > 0) {
+            // Normalize speed based on strip length difference
+            uint8_t maxLength = (headlightLedCount > taillightLedCount) ? headlightLedCount : taillightLedCount;
+            uint8_t lengthRatio = (maxLength * 100) / receivedData->stripLength;
+            effectSpeed = constrain(effectSpeed * lengthRatio / 100, 0, 255);
         }
         
         // Update LED strips
@@ -570,6 +726,7 @@ void processBrakingDetection(MotionData& data);
 void showBrakingEffect();
 void blendLEDArrays(CRGB* target, CRGB* source1, CRGB* source2, uint8_t numLeds, float fadeProgress);
 void applyEffectToArray(CRGB* leds, uint8_t numLeds, uint8_t effect, CRGB color, EffectTiming& timing, uint8_t ledType, uint8_t colorOrder, CRGB backgroundColor, bool backgroundEnabled);
+void updateSoftAPChannel();
 
 // Original effect functions (kept for compatibility)
 void effectBreath(CRGB* leds, uint8_t numLeds, CRGB color);
@@ -608,6 +765,7 @@ void effectPoliceImproved(CRGB* leds, uint8_t numLeds, uint16_t step);
 void effectStrobeImproved(CRGB* leds, uint8_t numLeds, CRGB color, uint16_t step);
 void effectLarsonScannerImproved(CRGB* leds, uint8_t numLeds, CRGB color, uint16_t step);
 void effectColorWipeImproved(CRGB* leds, uint8_t numLeds, CRGB color, uint16_t step);
+void effectRainbowWipeImproved(CRGB* leds, uint8_t numLeds, uint16_t step);
 void effectTheaterChaseImproved(CRGB* leds, uint8_t numLeds, CRGB color, uint16_t step);
 void effectRunningLightsImproved(CRGB* leds, uint8_t numLeds, CRGB color, uint16_t step);
 void effectColorSweepImproved(CRGB* leds, uint8_t numLeds, CRGB color, uint16_t step);
@@ -617,6 +775,13 @@ void effectDualRainbowKnightRiderImproved(CRGB* leds, uint8_t numLeds, uint16_t 
 void setPreset(uint8_t preset);
 void handleSerialCommands();
 void printStatus();
+void initDefaultPresets();
+void captureCurrentPreset(PresetConfig& preset);
+bool addPreset(const String& name);
+bool updatePreset(uint8_t index, const String& name);
+bool deletePreset(uint8_t index);
+void loadPresetsFromDoc(const JsonDocument& doc);
+void savePresetsToDoc(JsonDocument& doc);
 void printHelp();
 void listSPIFFSFiles();
 void showSettingsFile();
@@ -661,8 +826,8 @@ void handleOTAError(int error);
 
 // LED Configuration functions
 void initializeLEDs();
-void initializeWhiteLEDs();
-void updateWhiteLEDs();
+void applyRgbwWhiteChannelMode();
+void setRgbwWhiteMode(uint8_t mode);
 void testLEDConfiguration();
 String getLEDTypeName(uint8_t type);
 String getColorOrderName(uint8_t order);
@@ -684,6 +849,9 @@ void testFilesystem();
 bool initESPNow();
 void sendESPNowData();
 void addESPNowPeer(uint8_t* macAddress);
+void deinitESPNow();
+bool ensureESPNowActive(const char* context);
+const char* espNowErrorName(esp_err_t error);
 
 // Group Management functions
 void handleGroupMessage(const uint8_t* mac_addr, const uint8_t* data, int len);
@@ -708,6 +876,17 @@ void handleUI();
 void handleUIUpdate();
 bool processUIUpdate(const String& updatePath);
 bool processUIUpdateStreaming(const String& updatePath);
+bool applyApiJson(DynamicJsonDocument& doc, bool allowRestart, bool& shouldRestart);
+void appendBleRequestChunk(const String& chunk);
+bool consumeBleRequest(String& requestOut);
+int parseBleContentLength(const String& headers);
+void sendBleResponse(const String& response);
+uint16_t crc16Ccitt(const uint8_t* data, size_t length);
+bool tryExtractBleFrame(std::string& buffer, BleFrame& frame);
+void sendBleFrame(uint8_t type, uint8_t seq, uint8_t flags, const uint8_t* payload, uint16_t length);
+void sendBleAck(uint8_t seq);
+void sendBleError(uint8_t seq, const String& message);
+String getOtaStatusJSON();
 bool saveUIFile(const String& filename, const String& content);
 void serveEmbeddedUI();
 void handleAPI();
@@ -726,17 +905,6 @@ void setup() {
     // ⚡ FAST BOOT: Initialize LEDs FIRST for immediate visual feedback
     // Use default values if settings not loaded yet
     initializeLEDs();
-    initializeWhiteLEDs();  // Initialize dedicated white LEDs
-
-#if WHITE_LED_TEST_MODE
-    Serial.println("⚠️ WHITE_LED_TEST_MODE enabled: blinking taillight white");
-    for (uint8_t i = 0; i < 3; i++) {
-        ledcWrite(WHITE_LED_PWM_CHANNEL_TAILLIGHT, 255); // On
-        delay(400);
-        ledcWrite(WHITE_LED_PWM_CHANNEL_TAILLIGHT, 0); // Off
-        delay(400);
-    }
-#endif
     
     // Show a simple "booting" pattern immediately
     fillSolidWithColorOrder(headlight, headlightLedCount, CRGB::Blue, headlightLedType, headlightColorOrder);
@@ -749,6 +917,9 @@ void setup() {
     
     // Load saved settings
     loadSettings();
+    if (presetCount == 0) {
+        initDefaultPresets();
+    }
     
     // Skip testFilesystem() during boot - it's unnecessary and slow
     // Can be called manually via serial command if needed
@@ -858,10 +1029,12 @@ void loop() {
     sendESPNowData();
     
     // Handle group management
-    if (groupCode.length() > 0) {
+    if (enableESPNow && groupCode.length() > 0) {
         checkMasterTimeout();
         if (isGroupMaster) {
             sendGroupHeartbeat();
+        } else if (joinInProgress && (millis() - lastJoinRequest >= JOIN_RETRY_INTERVAL)) {
+            sendJoinRequest();
         }
     }
     
@@ -870,6 +1043,48 @@ void loop() {
     
     // Handle web server requests
     server.handleClient();
+
+    // Process queued BLE requests outside BT task
+    String pendingBleRequest = "";
+    portENTER_CRITICAL(&bleRequestQueueMutex);
+    if (bleRequestQueueCount > 0) {
+        pendingBleRequest = bleRequestQueue[bleRequestQueueHead];
+        bleRequestQueue[bleRequestQueueHead] = "";
+        bleRequestQueueHead = (bleRequestQueueHead + 1) % BLE_REQUEST_QUEUE_SIZE;
+        bleRequestQueueCount--;
+    }
+    portEXIT_CRITICAL(&bleRequestQueueMutex);
+
+    if (pendingBleRequest.length() > 0) {
+        processBLEHTTPRequest(pendingBleRequest);
+    }
+
+    // Apply deferred BLE API updates outside BT task
+    String pendingJsonCopy = "";
+    bool shouldApplyPending = false;
+    portENTER_CRITICAL(&blePendingMutex);
+    if (blePendingApply) {
+        shouldApplyPending = true;
+        blePendingApply = false;
+        pendingJsonCopy = blePendingJson;
+        blePendingJson = "";
+    }
+    portEXIT_CRITICAL(&blePendingMutex);
+
+    if (shouldApplyPending && pendingJsonCopy.length() > 0) {
+        DynamicJsonDocument doc(2048);
+        DeserializationError error = deserializeJson(doc, pendingJsonCopy);
+        if (error) {
+            Serial.printf("BLE: Deferred JSON parse error: %s\n", error.c_str());
+        } else {
+            bool shouldRestart = false;
+            applyApiJson(doc, true, shouldRestart);
+            if (shouldRestart) {
+                delay(1000);
+                ESP.restart();
+            }
+        }
+    }
     
     delay(10);
 }
@@ -887,6 +1102,7 @@ uint8_t getEffectSpeedMultiplier(uint8_t effect) {
             return 1; // Movement effects: normal speed (removed multiplier)
         case FX_WAVE:
         case FX_COLOR_WIPE:
+        case FX_RAINBOW_WIPE:
         case FX_THEATER_CHASE:
         case FX_RUNNING_LIGHTS:
         case FX_COLOR_SWEEP:
@@ -1000,6 +1216,9 @@ void applyEffectToArray(CRGB* leds, uint8_t numLeds, uint8_t effect, CRGB color,
         case FX_COLOR_WIPE:
             effectColorWipeImproved(leds, numLeds, color, timing.step);
             break;
+        case FX_RAINBOW_WIPE:
+            effectRainbowWipeImproved(leds, numLeds, timing.step);
+            break;
         case FX_THEATER_CHASE:
             effectTheaterChaseImproved(leds, numLeds, color, timing.step);
             break;
@@ -1030,8 +1249,8 @@ void updateEffects() {
     bool headlightUpdate = shouldUpdateEffect(headlightTiming, effectSpeed, headlightLedCount);
     bool taillightUpdate = shouldUpdateEffect(taillightTiming, effectSpeed, taillightLedCount);
     
-    // Only update if timing allows it, UNLESS we're in a fade (need smooth blending every frame)
-    if (!headlightUpdate && !taillightUpdate && !directionChangePending) {
+    // Only update if timing allows it, UNLESS we're in a fade or manual effects are active
+    if (!headlightUpdate && !taillightUpdate && !directionChangePending && !blinkerActive && !brakingActive) {
         return;
     }
     
@@ -1039,18 +1258,6 @@ void updateEffects() {
     if (parkModeActive) {
         showParkEffect();
         return; // Skip normal effects when in park mode
-    }
-    
-    // Priority 2: Braking effects (high priority - but allow headlight to continue)
-    if (brakingActive) {
-        showBrakingEffect();
-        // Continue to update headlight normally (don't return)
-    }
-    
-    // Priority 3: Blinker effects (medium priority - overrides normal effects)
-    if (blinkerActive) {
-        showBlinkerEffect(blinkerDirection);
-        return; // Skip normal effects when blinkers are active
     }
     
     // Priority 3: Normal effects (lowest priority - default behavior)
@@ -1191,6 +1398,18 @@ void updateEffects() {
         if (taillightUpdate) {
             applyEffectToArray(taillight, taillightLedCount, taillightEffect, taillightColor, taillightTiming, taillightLedType, taillightColorOrder, taillightBackgroundColor, taillightBackgroundEnabled);
         }
+    }
+
+    // Priority 4: Braking effects (override taillight after base effects)
+    if (brakingActive) {
+        showBrakingEffect();
+    }
+
+    // Priority 5: Blinker effects (override base colors while active)
+    if (blinkerActive) {
+        fillSolidWithColorOrder(headlight, headlightLedCount, CRGB::White, headlightLedType, headlightColorOrder);
+        fillSolidWithColorOrder(taillight, taillightLedCount, CRGB::Red, taillightLedType, taillightColorOrder);
+        showBlinkerEffect(blinkerDirection);
     }
     
     FastLED.show();
@@ -1899,6 +2118,36 @@ void effectColorWipeImproved(CRGB* leds, uint8_t numLeds, CRGB color, uint16_t s
     }
 }
 
+// Rainbow Color Wipe Effect (single-direction sweep, alternating direction)
+void effectRainbowWipeImproved(CRGB* leds, uint8_t numLeds, uint16_t step) {
+    uint8_t multiplier = getEffectSpeedMultiplier(FX_RAINBOW_WIPE);
+    uint16_t sweepStep = (step * multiplier) / 3;
+    uint16_t sweepIndex = sweepStep / numLeds;
+    uint8_t pos = sweepStep % numLeds;
+    bool forward = (sweepIndex % 2 == 0);
+
+    uint8_t prevHue = ((sweepIndex - 1) * 57 + 23) & 0xFF;
+    uint8_t currHue = (sweepIndex * 57 + 23) & 0xFF;
+    if (abs((int)prevHue - (int)currHue) < 32) {
+        currHue = (currHue + 64) & 0xFF;
+    }
+
+    CRGB backgroundColor = CHSV(prevHue, 255, 255);
+    CRGB wipeColor = CHSV(currHue, 255, 255);
+    fill_solid(leds, numLeds, backgroundColor);
+
+    if (forward) {
+        for (uint8_t i = 0; i <= pos && i < numLeds; i++) {
+            leds[i] = wipeColor;
+        }
+    } else {
+        uint8_t actualPos = (numLeds - 1) - pos;
+        for (uint8_t i = actualPos; i < numLeds; i++) {
+            leds[i] = wipeColor;
+        }
+    }
+}
+
 // Improved Theater Chase Effect with consistent timing
 void effectTheaterChaseImproved(CRGB* leds, uint8_t numLeds, CRGB color, uint16_t step) {
     // Apply speed multiplier for faster movement
@@ -2125,47 +2374,188 @@ void effectDualRainbowKnightRiderImproved(CRGB* leds, uint8_t numLeds, uint16_t 
 }
 
 void setPreset(uint8_t preset) {
+    if (preset >= presetCount) return;
     currentPreset = preset;
-    
-    switch (preset) {
-        case PRESET_STANDARD:
-            headlightColor = CRGB::White;
-            taillightColor = CRGB::Red;
-            headlightEffect = FX_SOLID;
-            taillightEffect = FX_SOLID;
-            globalBrightness = 200;
-            Serial.println("Standard Mode");
-            break;
-            
-        case PRESET_NIGHT:
-            headlightColor = CRGB::White;
-            taillightColor = CRGB::Red;
-            headlightEffect = FX_SOLID;
-            taillightEffect = FX_BREATH;
-            globalBrightness = 255;
-            Serial.println("Night Mode");
-            break;
-            
-        case PRESET_PARTY:
-            headlightColor = CRGB::White;
-            taillightColor = CRGB::Black;
-            headlightEffect = FX_SOLID;
-            taillightEffect = FX_RAINBOW;
-            globalBrightness = 180;
-            Serial.println("Party Mode");
-            break;
-            
-        case PRESET_STEALTH:
-            headlightColor = CRGB(50, 50, 50);
-            taillightColor = CRGB(20, 0, 0);
-            headlightEffect = FX_SOLID;
-            taillightEffect = FX_SOLID;
-            globalBrightness = 50;
-            Serial.println("Stealth Mode");
-            break;
-    }
-    
+
+    PresetConfig& config = presets[preset];
+    globalBrightness = config.brightness;
+    effectSpeed = config.effectSpeed;
+    headlightEffect = config.headlightEffect;
+    taillightEffect = config.taillightEffect;
+    headlightColor = CRGB(config.headlightColor[0], config.headlightColor[1], config.headlightColor[2]);
+    taillightColor = CRGB(config.taillightColor[0], config.taillightColor[1], config.taillightColor[2]);
+    headlightBackgroundEnabled = config.headlightBackgroundEnabled;
+    taillightBackgroundEnabled = config.taillightBackgroundEnabled;
+    headlightBackgroundColor = CRGB(config.headlightBackgroundColor[0], config.headlightBackgroundColor[1], config.headlightBackgroundColor[2]);
+    taillightBackgroundColor = CRGB(config.taillightBackgroundColor[0], config.taillightBackgroundColor[1], config.taillightBackgroundColor[2]);
+
+    Serial.printf("Preset applied: %s (index %d)\n", config.name, preset);
     FastLED.setBrightness(globalBrightness);
+}
+
+void captureCurrentPreset(PresetConfig& preset) {
+    preset.brightness = globalBrightness;
+    preset.effectSpeed = effectSpeed;
+    preset.headlightEffect = headlightEffect;
+    preset.taillightEffect = taillightEffect;
+    preset.headlightColor[0] = headlightColor.r;
+    preset.headlightColor[1] = headlightColor.g;
+    preset.headlightColor[2] = headlightColor.b;
+    preset.taillightColor[0] = taillightColor.r;
+    preset.taillightColor[1] = taillightColor.g;
+    preset.taillightColor[2] = taillightColor.b;
+    preset.headlightBackgroundEnabled = headlightBackgroundEnabled;
+    preset.taillightBackgroundEnabled = taillightBackgroundEnabled;
+    preset.headlightBackgroundColor[0] = headlightBackgroundColor.r;
+    preset.headlightBackgroundColor[1] = headlightBackgroundColor.g;
+    preset.headlightBackgroundColor[2] = headlightBackgroundColor.b;
+    preset.taillightBackgroundColor[0] = taillightBackgroundColor.r;
+    preset.taillightBackgroundColor[1] = taillightBackgroundColor.g;
+    preset.taillightBackgroundColor[2] = taillightBackgroundColor.b;
+}
+
+void initDefaultPresets() {
+    presetCount = 0;
+    auto addDefault = [&](const char* name, uint8_t brightness, uint8_t effectSpeedValue,
+                          uint8_t headEffect, uint8_t tailEffect,
+                          const CRGB& headColor, const CRGB& tailColor) {
+        if (presetCount >= MAX_PRESETS) return;
+        PresetConfig& preset = presets[presetCount];
+        strncpy(preset.name, name, sizeof(preset.name) - 1);
+        preset.name[sizeof(preset.name) - 1] = '\0';
+        preset.brightness = brightness;
+        preset.effectSpeed = effectSpeedValue;
+        preset.headlightEffect = headEffect;
+        preset.taillightEffect = tailEffect;
+        preset.headlightColor[0] = headColor.r;
+        preset.headlightColor[1] = headColor.g;
+        preset.headlightColor[2] = headColor.b;
+        preset.taillightColor[0] = tailColor.r;
+        preset.taillightColor[1] = tailColor.g;
+        preset.taillightColor[2] = tailColor.b;
+        preset.headlightBackgroundEnabled = headlightBackgroundEnabled;
+        preset.taillightBackgroundEnabled = taillightBackgroundEnabled;
+        preset.headlightBackgroundColor[0] = headlightBackgroundColor.r;
+        preset.headlightBackgroundColor[1] = headlightBackgroundColor.g;
+        preset.headlightBackgroundColor[2] = headlightBackgroundColor.b;
+        preset.taillightBackgroundColor[0] = taillightBackgroundColor.r;
+        preset.taillightBackgroundColor[1] = taillightBackgroundColor.g;
+        preset.taillightBackgroundColor[2] = taillightBackgroundColor.b;
+        presetCount++;
+    };
+
+    addDefault("Standard", 200, 64, FX_SOLID, FX_SOLID, CRGB::White, CRGB::Red);
+    addDefault("Night", 255, 64, FX_SOLID, FX_BREATH, CRGB::White, CRGB::Red);
+    addDefault("Party", 180, 64, FX_SOLID, FX_RAINBOW, CRGB::White, CRGB::Black);
+    addDefault("Stealth", 50, 64, FX_SOLID, FX_SOLID, CRGB(50, 50, 50), CRGB(20, 0, 0));
+}
+
+bool addPreset(const String& name) {
+    if (presetCount >= MAX_PRESETS) return false;
+    PresetConfig& preset = presets[presetCount];
+    captureCurrentPreset(preset);
+    strncpy(preset.name, name.c_str(), sizeof(preset.name) - 1);
+    preset.name[sizeof(preset.name) - 1] = '\0';
+    presetCount++;
+    return true;
+}
+
+bool updatePreset(uint8_t index, const String& name) {
+    if (index >= presetCount) return false;
+    PresetConfig& preset = presets[index];
+    captureCurrentPreset(preset);
+    if (name.length() > 0) {
+        strncpy(preset.name, name.c_str(), sizeof(preset.name) - 1);
+        preset.name[sizeof(preset.name) - 1] = '\0';
+    }
+    return true;
+}
+
+bool deletePreset(uint8_t index) {
+    if (index >= presetCount) return false;
+    if (presetCount <= 1) return false;
+    for (uint8_t i = index; i + 1 < presetCount; i++) {
+        presets[i] = presets[i + 1];
+    }
+    presetCount--;
+    if (currentPreset >= presetCount) {
+        currentPreset = presetCount > 0 ? presetCount - 1 : 0;
+    }
+    return true;
+}
+
+void loadPresetsFromDoc(const JsonDocument& doc) {
+    presetCount = 0;
+    if (doc.containsKey("presets")) {
+        JsonArrayConst presetsArray = doc["presets"].as<JsonArrayConst>();
+        for (JsonVariantConst presetVar : presetsArray) {
+            if (presetCount >= MAX_PRESETS) break;
+            JsonObjectConst presetObj = presetVar.as<JsonObjectConst>();
+            PresetConfig& preset = presets[presetCount];
+            const char* nameValue = presetObj["name"] | "";
+            if (nameValue[0] == '\0') {
+                String defaultName = String("Preset ") + String(presetCount + 1);
+                strncpy(preset.name, defaultName.c_str(), sizeof(preset.name) - 1);
+            } else {
+                strncpy(preset.name, nameValue, sizeof(preset.name) - 1);
+            }
+            preset.name[sizeof(preset.name) - 1] = '\0';
+            preset.brightness = presetObj["brightness"] | DEFAULT_BRIGHTNESS;
+            preset.effectSpeed = presetObj["effectSpeed"] | effectSpeed;
+            preset.headlightEffect = presetObj["headlightEffect"] | FX_SOLID;
+            preset.taillightEffect = presetObj["taillightEffect"] | FX_SOLID;
+            preset.headlightColor[0] = presetObj["headlightColor_r"] | headlightColor.r;
+            preset.headlightColor[1] = presetObj["headlightColor_g"] | headlightColor.g;
+            preset.headlightColor[2] = presetObj["headlightColor_b"] | headlightColor.b;
+            preset.taillightColor[0] = presetObj["taillightColor_r"] | taillightColor.r;
+            preset.taillightColor[1] = presetObj["taillightColor_g"] | taillightColor.g;
+            preset.taillightColor[2] = presetObj["taillightColor_b"] | taillightColor.b;
+            preset.headlightBackgroundEnabled = presetObj["headlightBackgroundEnabled"] | headlightBackgroundEnabled;
+            preset.taillightBackgroundEnabled = presetObj["taillightBackgroundEnabled"] | taillightBackgroundEnabled;
+            preset.headlightBackgroundColor[0] = presetObj["headlightBackgroundColor_r"] | headlightBackgroundColor.r;
+            preset.headlightBackgroundColor[1] = presetObj["headlightBackgroundColor_g"] | headlightBackgroundColor.g;
+            preset.headlightBackgroundColor[2] = presetObj["headlightBackgroundColor_b"] | headlightBackgroundColor.b;
+            preset.taillightBackgroundColor[0] = presetObj["taillightBackgroundColor_r"] | taillightBackgroundColor.r;
+            preset.taillightBackgroundColor[1] = presetObj["taillightBackgroundColor_g"] | taillightBackgroundColor.g;
+            preset.taillightBackgroundColor[2] = presetObj["taillightBackgroundColor_b"] | taillightBackgroundColor.b;
+            presetCount++;
+        }
+    }
+
+    if (presetCount == 0) {
+        initDefaultPresets();
+    }
+
+    if (currentPreset >= presetCount) {
+        currentPreset = 0;
+    }
+}
+
+void savePresetsToDoc(JsonDocument& doc) {
+    JsonArray presetsArray = doc.createNestedArray("presets");
+    for (uint8_t i = 0; i < presetCount; i++) {
+        JsonObject presetObj = presetsArray.createNestedObject();
+        PresetConfig& preset = presets[i];
+        presetObj["name"] = preset.name;
+        presetObj["brightness"] = preset.brightness;
+        presetObj["effectSpeed"] = preset.effectSpeed;
+        presetObj["headlightEffect"] = preset.headlightEffect;
+        presetObj["taillightEffect"] = preset.taillightEffect;
+        presetObj["headlightColor_r"] = preset.headlightColor[0];
+        presetObj["headlightColor_g"] = preset.headlightColor[1];
+        presetObj["headlightColor_b"] = preset.headlightColor[2];
+        presetObj["taillightColor_r"] = preset.taillightColor[0];
+        presetObj["taillightColor_g"] = preset.taillightColor[1];
+        presetObj["taillightColor_b"] = preset.taillightColor[2];
+        presetObj["headlightBackgroundEnabled"] = preset.headlightBackgroundEnabled;
+        presetObj["taillightBackgroundEnabled"] = preset.taillightBackgroundEnabled;
+        presetObj["headlightBackgroundColor_r"] = preset.headlightBackgroundColor[0];
+        presetObj["headlightBackgroundColor_g"] = preset.headlightBackgroundColor[1];
+        presetObj["headlightBackgroundColor_b"] = preset.headlightBackgroundColor[2];
+        presetObj["taillightBackgroundColor_r"] = preset.taillightBackgroundColor[0];
+        presetObj["taillightBackgroundColor_g"] = preset.taillightBackgroundColor[1];
+        presetObj["taillightBackgroundColor_b"] = preset.taillightBackgroundColor[2];
+    }
 }
 
 // Startup Sequence Implementation
@@ -2481,6 +2871,7 @@ void updateMotionControl() {
 }
 
 void processBrakingDetection(MotionData& data) {
+    if (manualBrakeActive) return;
     if (!brakingEnabled || !motionEnabled) return;
     
     unsigned long currentTime = millis();
@@ -2615,6 +3006,7 @@ void showBrakingEffect() {
 
 void processBlinkers(MotionData& data) {
     unsigned long currentTime = millis();
+    if (manualBlinkerActive) return;
     
     // Use calibrated values if available
     float leftRightAccel = calibration.valid ? getCalibratedLeftRightAccel(data) : data.accelY;
@@ -3486,7 +3878,7 @@ void handleSerialCommands() {
         
         if (command.startsWith("p")) {
             uint8_t preset = command.substring(1).toInt();
-            if (preset <= 3) {
+            if (preset < presetCount) {
                 setPreset(preset);
             }
         }
@@ -3564,24 +3956,36 @@ void handleSerialCommands() {
             parkModeEnabled = false;
             Serial.println("Park mode disabled");
         }
-        else if (command.startsWith("group_create ")) {
-            groupCode = command.substring(13);
-            if (groupCode.length() == 6) {
-                isGroupMaster = true;
-                allowGroupJoin = true;
-                hasGroupMaster = true;
-                esp_wifi_get_mac(WIFI_IF_STA, groupMasterMac);
-                generateGroupCode();
-                Serial.printf("Group: Created with code %s\n", groupCode.c_str());
-            } else {
-                Serial.println("Group: Code must be 6 digits");
+        else if (command == "group_create" || command.startsWith("group_create ")) {
+            String code = "";
+            if (command.startsWith("group_create ")) {
+                code = command.substring(13);
             }
+            groupCode = code;
+            if (groupCode.length() != 6) {
+                groupCode = "";
+                generateGroupCode();
+            }
+            isGroupMaster = true;
+            allowGroupJoin = true;
+            hasGroupMaster = true;
+            autoJoinOnHeartbeat = false;
+            joinInProgress = false;
+            groupMemberCount = 0;
+            esp_wifi_get_mac(WIFI_IF_STA, groupMasterMac);
+            // Add self as a group member when creating a group
+            uint8_t mac[6];
+            esp_wifi_get_mac(WIFI_IF_STA, mac);
+            addGroupMember(mac, deviceName.c_str());
+            Serial.printf("Group: Created with code %s\n", groupCode.c_str());
         }
         else if (command.startsWith("group_join ")) {
             groupCode = command.substring(11);
             if (groupCode.length() == 6) {
                 isGroupMaster = false;
                 hasGroupMaster = false;
+                autoJoinOnHeartbeat = false;
+                joinInProgress = true;
                 memset(groupMasterMac, 0, sizeof(groupMasterMac));
                 groupMemberCount = 0;
                 sendJoinRequest();
@@ -3590,12 +3994,25 @@ void handleSerialCommands() {
                 Serial.println("Group: Code must be 6 digits");
             }
         }
+        else if (command == "group_scan_join") {
+            groupCode = "";
+            isGroupMaster = false;
+            hasGroupMaster = false;
+            allowGroupJoin = false;
+            autoJoinOnHeartbeat = true;
+            joinInProgress = false;
+            groupMemberCount = 0;
+            memset(groupMasterMac, 0, sizeof(groupMasterMac));
+            Serial.println("Group: Scanning for group heartbeat to join");
+        }
         else if (command == "group_leave") {
             groupCode = "";
             isGroupMaster = false;
             allowGroupJoin = false;
             groupMemberCount = 0;
             hasGroupMaster = false;
+            autoJoinOnHeartbeat = false;
+            joinInProgress = false;
             memset(groupMasterMac, 0, sizeof(groupMasterMac));
             Serial.println("Group: Left group");
         }
@@ -3608,9 +4025,10 @@ void handleSerialCommands() {
             Serial.println("Group: Join requests disabled");
         }
         else if (command == "group_status") {
-            Serial.printf("Group: Code=%s, Master=%s, Members=%d, AllowJoin=%s\n", 
+            Serial.printf("Group: Code=%s, Master=%s, Members=%d, AllowJoin=%s, AutoJoin=%s\n", 
                          groupCode.c_str(), isGroupMaster ? "Yes" : "No", 
-                         groupMemberCount, allowGroupJoin ? "Yes" : "No");
+                         groupMemberCount, allowGroupJoin ? "Yes" : "No",
+                         autoJoinOnHeartbeat ? "Yes" : "No");
         }
         else if (command.startsWith("park_effect ")) {
             int effect = command.substring(12).toInt();
@@ -3722,7 +4140,7 @@ void printStatus() {
 
 void printHelp() {
     Serial.println("Available commands:");
-    Serial.println("  p0-p3: Set preset (0=Standard, 1=Night, 2=Party, 3=Stealth)");
+    Serial.printf("  p0-p%d: Set preset by index\n", presetCount > 0 ? (presetCount - 1) : 0);
     Serial.println("  b<0-255>: Set brightness");
     Serial.println("  h<hex>: Set headlight color (e.g., hFF0000)");
     Serial.println("  t<hex>: Set taillight color (e.g., t00FF00)");
@@ -3744,8 +4162,9 @@ void printHelp() {
     Serial.println("  park_color taillight r,g,b: Set park taillight color");
     Serial.println("");
     Serial.println("Group Ride Commands:");
-    Serial.println("  group_create <6-digit-code>: Create a group ride");
+    Serial.println("  group_create [6-digit-code]: Create a group ride");
     Serial.println("  group_join <6-digit-code>: Join a group ride");
+    Serial.println("  group_scan_join: Scan and join the first group found");
     Serial.println("  group_leave: Leave current group");
     Serial.println("  group_allow_join: Allow new members to join");
     Serial.println("  group_block_join: Block new members from joining");
@@ -3928,13 +4347,17 @@ void cleanDuplicateFiles() {
 
 // Web Server Implementation
 void setupWiFiAP() {
-    WiFi.mode(WIFI_AP);
-    WiFi.softAP(apName.c_str(), apPassword.c_str(), AP_CHANNEL, false, MAX_CONNECTIONS);
+    WiFi.mode(WIFI_AP_STA);
+    WiFi.softAP(apName.c_str(), apPassword.c_str(), espNowChannel, false, MAX_CONNECTIONS);
     
     IPAddress IP = WiFi.softAPIP();
     Serial.printf("AP IP address: %s\n", IP.toString().c_str());
     Serial.printf("Connect to WiFi: %s\n", apName.c_str());
     Serial.printf("Password: %s\n", apPassword.c_str());
+}
+
+void updateSoftAPChannel() {
+    WiFi.softAP(apName.c_str(), apPassword.c_str(), espNowChannel, false, MAX_CONNECTIONS);
 }
 
 void setupBluetooth() {
@@ -3944,6 +4367,7 @@ void setupBluetooth() {
     }
     
     // Initialize BLE
+    BLEDevice::setMTU(185);
     BLEDevice::init(bluetoothDeviceName.c_str());
     pBLEServer = BLEDevice::createServer();
     pBLEServer->setCallbacks(new MyServerCallbacks());
@@ -3956,8 +4380,14 @@ void setupBluetooth() {
                         "87654321-4321-4321-4321-cba987654321",
                         BLECharacteristic::PROPERTY_READ |
                         BLECharacteristic::PROPERTY_WRITE |
-                        BLECharacteristic::PROPERTY_NOTIFY
+                        BLECharacteristic::PROPERTY_NOTIFY |
+                        BLECharacteristic::PROPERTY_INDICATE
                       );
+
+    BLE2902 *ble2902 = new BLE2902();
+    ble2902->setNotifications(true);
+    ble2902->setIndications(true);
+    pCharacteristic->addDescriptor(ble2902);
 
     pCharacteristic->setCallbacks(new MyCallbacks());
     pCharacteristic->setValue("ArkLights BLE Service");
@@ -3983,10 +4413,12 @@ void processBLEHTTPRequest(String request) {
     
     if (request.startsWith("GET /api/status")) {
         // Send status response
-        String statusResponse = "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\r\n";
-        statusResponse += getStatusJSON();
-        pCharacteristic->setValue(statusResponse.c_str());
-        pCharacteristic->notify();
+        String body = getStatusJSON();
+        String statusResponse = "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: ";
+        statusResponse += String(body.length());
+        statusResponse += "\r\n\r\n";
+        statusResponse += body;
+        sendBleResponse(statusResponse);
         Serial.println("BLE: Sent status response");
     }
     else if (request.startsWith("POST /api")) {
@@ -4005,90 +4437,78 @@ void processBLEHTTPRequest(String request) {
             
             if (error) {
                 Serial.printf("BLE: JSON parse error: %s\n", error.c_str());
-                String response = "HTTP/1.1 400 Bad Request\r\nContent-Type: application/json\r\n\r\n{\"error\":\"Invalid JSON\"}";
-                pCharacteristic->setValue(response.c_str());
-                pCharacteristic->notify();
+                String body = "{\"error\":\"Invalid JSON\"}";
+                String response = "HTTP/1.1 400 Bad Request\r\nContent-Type: application/json\r\nContent-Length: ";
+                response += String(body.length());
+                response += "\r\n\r\n";
+                response += body;
+                sendBleResponse(response);
                 delete doc;
                 return;
             }
             
-            // Process the LED control request
-            bool processed = false;
-            
-            if (doc->containsKey("preset")) {
-                int preset = (*doc)["preset"];
-                Serial.printf("BLE: Setting preset to %d\n", preset);
-                // TODO: Implement preset setting
-                processed = true;
+            if (blePendingApply) {
+                String body = "{\"error\":\"Busy\"}";
+                String response = "HTTP/1.1 429 Too Many Requests\r\nContent-Type: application/json\r\nContent-Length: ";
+                response += String(body.length());
+                response += "\r\n\r\n";
+                response += body;
+                sendBleResponse(response);
+                delete doc;
+                return;
             }
-            
-            if (doc->containsKey("brightness")) {
-                int brightness = (*doc)["brightness"];
-                Serial.printf("BLE: Setting brightness to %d\n", brightness);
-                // TODO: Implement brightness setting
-                processed = true;
-            }
-            
-            if (doc->containsKey("headlightColor")) {
-                String color = (*doc)["headlightColor"];
-                Serial.printf("BLE: Setting headlight color to %s\n", color.c_str());
-                // TODO: Implement headlight color setting
-                processed = true;
-            }
-            
-            if (doc->containsKey("taillightColor")) {
-                String color = (*doc)["taillightColor"];
-                Serial.printf("BLE: Setting taillight color to %s\n", color.c_str());
-                // TODO: Implement taillight color setting
-                processed = true;
-            }
-            
-            if (doc->containsKey("motion_enabled")) {
-                bool enabled = (*doc)["motion_enabled"];
-                Serial.printf("BLE: Setting motion enabled to %s\n", enabled ? "true" : "false");
-                // TODO: Implement motion control setting
-                processed = true;
-            }
-            
-            if (processed) {
-                String response = "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\r\n{\"success\":true}";
-                pCharacteristic->setValue(response.c_str());
-                pCharacteristic->notify();
-                Serial.println("BLE: Sent API response");
-            } else {
-                String response = "HTTP/1.1 400 Bad Request\r\nContent-Type: application/json\r\n\r\n{\"error\":\"No valid parameters\"}";
-                pCharacteristic->setValue(response.c_str());
-                pCharacteristic->notify();
-            }
-            
-            // Clean up memory
+
+            portENTER_CRITICAL(&blePendingMutex);
+            blePendingJson = jsonBody;
+            blePendingApply = true;
+            portEXIT_CRITICAL(&blePendingMutex);
+            String body = "{\"queued\":true}";
+            String response = "HTTP/1.1 202 Accepted\r\nContent-Type: application/json\r\nContent-Length: ";
+            response += String(body.length());
+            response += "\r\n\r\n";
+            response += body;
+            sendBleResponse(response);
+            Serial.println("BLE: Queued API request");
+
             delete doc;
         } else {
-            String response = "HTTP/1.1 400 Bad Request\r\nContent-Type: application/json\r\n\r\n{\"error\":\"No JSON body\"}";
-            pCharacteristic->setValue(response.c_str());
-            pCharacteristic->notify();
+            String body = "{\"error\":\"No JSON body\"}";
+            String response = "HTTP/1.1 400 Bad Request\r\nContent-Type: application/json\r\nContent-Length: ";
+            response += String(body.length());
+            response += "\r\n\r\n";
+            response += body;
+            sendBleResponse(response);
         }
     }
     else if (request.startsWith("POST /api/led-config")) {
         // Process LED config
         Serial.println("BLE: Processing LED config");
-        String response = "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\r\n{\"status\":\"ok\"}";
-        pCharacteristic->setValue(response.c_str());
-        pCharacteristic->notify();
+        String body = "{\"status\":\"ok\"}";
+        String response = "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: ";
+        response += String(body.length());
+        response += "\r\n\r\n";
+        response += body;
+        sendBleResponse(response);
     }
     else if (request.startsWith("POST /api/led-test")) {
         // Process LED test
         Serial.println("BLE: Processing LED test");
-        String response = "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\r\n{\"status\":\"ok\"}";
-        pCharacteristic->setValue(response.c_str());
-        pCharacteristic->notify();
+        String body = "{\"status\":\"ok\"}";
+        String response = "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: ";
+        response += String(body.length());
+        response += "\r\n\r\n";
+        response += body;
+        sendBleResponse(response);
     }
     else {
         // Default response
         Serial.printf("BLE: Unknown request: %s\n", request.c_str());
-        String response = "HTTP/1.1 404 Not Found\r\nContent-Type: text/plain\r\n\r\nNot Found";
-        pCharacteristic->setValue(response.c_str());
-        pCharacteristic->notify();
+        String body = "Not Found";
+        String response = "HTTP/1.1 404 Not Found\r\nContent-Type: text/plain\r\nContent-Length: ";
+        response += String(body.length());
+        response += "\r\n\r\n";
+        response += body;
+        sendBleResponse(response);
     }
 }
 
@@ -4841,6 +5261,647 @@ bool processUIUpdate(const String& updatePath) {
     return false;
 }
 
+bool applyApiJson(DynamicJsonDocument& doc, bool allowRestart, bool& shouldRestart) {
+    shouldRestart = false;
+
+    if (doc.containsKey("preset")) {
+        setPreset(doc["preset"]);
+        saveSettings(); // Auto-save
+    }
+
+    if (doc.containsKey("presetAction")) {
+        String action = doc["presetAction"].as<String>();
+        if (action == "save") {
+            String name = doc["presetName"] | "Custom Preset";
+            if (addPreset(name)) {
+                saveSettings();
+            }
+        } else if (action == "update") {
+            int index = doc["presetIndex"] | -1;
+            String name = doc["presetName"] | "";
+            if (index >= 0 && updatePreset((uint8_t)index, name)) {
+                saveSettings();
+            }
+        } else if (action == "delete") {
+            int index = doc["presetIndex"] | -1;
+            if (index >= 0 && deletePreset((uint8_t)index)) {
+                saveSettings();
+            }
+        }
+    }
+    if (doc.containsKey("brightness")) {
+        globalBrightness = doc["brightness"];
+        FastLED.setBrightness(globalBrightness);
+        saveSettings(); // Auto-save
+    }
+    if (doc.containsKey("effectSpeed")) {
+        effectSpeed = doc["effectSpeed"];
+        saveSettings(); // Auto-save
+    }
+
+    bool configChanged = false;
+    if (doc.containsKey("headlightLedCount")) {
+        uint8_t newHeadlightCount = doc["headlightLedCount"];
+        if (newHeadlightCount != headlightLedCount) {
+            Serial.printf("LED Config: Headlight count changed from %d to %d\n", headlightLedCount, newHeadlightCount);
+            headlightLedCount = newHeadlightCount;
+            configChanged = true;
+        }
+    }
+    if (doc.containsKey("taillightLedCount")) {
+        uint8_t newTaillightCount = doc["taillightLedCount"];
+        if (newTaillightCount != taillightLedCount) {
+            Serial.printf("LED Config: Taillight count changed from %d to %d\n", taillightLedCount, newTaillightCount);
+            taillightLedCount = newTaillightCount;
+            configChanged = true;
+        }
+    }
+    if (doc.containsKey("headlightLedType")) {
+        headlightLedType = doc["headlightLedType"];
+        configChanged = true;
+    }
+    if (doc.containsKey("taillightLedType")) {
+        taillightLedType = doc["taillightLedType"];
+        configChanged = true;
+    }
+    if (doc.containsKey("headlightColorOrder")) {
+        headlightColorOrder = doc["headlightColorOrder"];
+        configChanged = true;
+    }
+    if (doc.containsKey("taillightColorOrder")) {
+        taillightColorOrder = doc["taillightColorOrder"];
+        configChanged = true;
+    }
+    if (configChanged) {
+        saveSettings();
+        initializeLEDs();
+        Serial.println("LED configuration updated and applied!");
+    }
+    if (doc.containsKey("startup_sequence")) {
+        startupSequence = doc["startup_sequence"];
+        startupEnabled = (startupSequence != STARTUP_NONE);
+        saveSettings(); // Auto-save
+    }
+    if (doc.containsKey("startup_duration")) {
+        startupDuration = doc["startup_duration"];
+        saveSettings(); // Auto-save
+    }
+    if (doc.containsKey("testStartup") && doc["testStartup"]) {
+        startStartupSequence();
+    }
+    if (doc.containsKey("testParkMode") && doc["testParkMode"]) {
+        // Temporarily activate park mode for testing
+        parkModeActive = true;
+        parkStartTime = millis(); // Reset timer
+        Serial.println("🅿️ Test park mode activated");
+    }
+    if (doc.containsKey("testLEDs") && doc["testLEDs"]) {
+        testLEDConfiguration();
+    }
+    
+    // Motion control API
+    if (doc.containsKey("motion_enabled")) {
+        bool newMotionEnabled = doc["motion_enabled"];
+        
+        // If motion control is being disabled, deactivate all motion features
+        if (motionEnabled && !newMotionEnabled) {
+            if (parkModeActive) {
+                parkModeActive = false;
+                parkStartTime = 0;
+                resetToNormalEffects(); // Reset LEDs to normal state
+                Serial.println("🅿️ Motion control disabled - deactivating park mode");
+            }
+            if (blinkerActive) {
+                blinkerActive = false;
+                blinkerStartTime = 0;
+                manualBlinkerActive = false;
+                resetToNormalEffects(); // Reset LEDs to normal state
+                Serial.println("🚦 Motion control disabled - deactivating blinkers");
+            }
+        }
+        
+        motionEnabled = newMotionEnabled;
+        saveSettings(); // Auto-save
+    }
+    if (doc.containsKey("blinker_enabled")) {
+        bool newBlinkerEnabled = doc["blinker_enabled"];
+        
+        // If blinkers are being disabled and they're currently active, deactivate them
+        if (blinkerEnabled && !newBlinkerEnabled && blinkerActive) {
+            blinkerActive = false;
+            blinkerStartTime = 0;
+            manualBlinkerActive = false;
+            resetToNormalEffects(); // Reset LEDs to normal state
+            Serial.println("🚦 Blinkers disabled - deactivating current blinker");
+        }
+        
+        blinkerEnabled = newBlinkerEnabled;
+        saveSettings(); // Auto-save
+    }
+    if (doc.containsKey("park_mode_enabled")) {
+        bool newParkModeEnabled = doc["park_mode_enabled"];
+        
+        // If park mode is being disabled and it's currently active, deactivate it
+        if (parkModeEnabled && !newParkModeEnabled && parkModeActive) {
+            parkModeActive = false;
+            parkStartTime = 0;
+            resetToNormalEffects(); // Reset LEDs to normal state
+            Serial.println("🅿️ Park mode disabled - deactivating current park mode");
+        }
+        
+        parkModeEnabled = newParkModeEnabled;
+        saveSettings(); // Auto-save
+    }
+    if (doc.containsKey("impact_detection_enabled")) {
+        impactDetectionEnabled = doc["impact_detection_enabled"];
+        saveSettings(); // Auto-save
+    }
+    if (doc.containsKey("motion_sensitivity")) {
+        motionSensitivity = doc["motion_sensitivity"];
+        saveSettings(); // Auto-save
+    }
+    if (doc.containsKey("blinker_delay")) {
+        blinkerDelay = doc["blinker_delay"];
+        saveSettings(); // Auto-save
+    }
+    if (doc.containsKey("blinker_timeout")) {
+        blinkerTimeout = doc["blinker_timeout"];
+        saveSettings(); // Auto-save
+    }
+    if (doc.containsKey("manualBlinker")) {
+        String manual = doc["manualBlinker"].as<String>();
+        if (manual == "left" || manual == "right") {
+            manualBlinkerActive = true;
+            blinkerActive = true;
+            blinkerDirection = (manual == "right") ? 1 : -1;
+            blinkerStartTime = millis();
+        } else if (manual == "off") {
+            manualBlinkerActive = false;
+            blinkerActive = false;
+            blinkerDirection = 0;
+            blinkerStartTime = 0;
+            resetToNormalEffects();
+        }
+    }
+    if (doc.containsKey("park_detection_angle")) {
+        parkDetectionAngle = doc["park_detection_angle"];
+        saveSettings(); // Auto-save
+    }
+    if (doc.containsKey("park_stationary_time")) {
+        parkStationaryTime = doc["park_stationary_time"];
+        saveSettings(); // Auto-save
+    }
+    if (doc.containsKey("park_accel_noise_threshold")) {
+        parkAccelNoiseThreshold = doc["park_accel_noise_threshold"];
+        saveSettings(); // Auto-save
+    }
+    if (doc.containsKey("park_gyro_noise_threshold")) {
+        parkGyroNoiseThreshold = doc["park_gyro_noise_threshold"];
+        saveSettings(); // Auto-save
+    }
+    if (doc.containsKey("park_effect")) {
+        parkEffect = doc["park_effect"];
+        saveSettings(); // Auto-save
+    }
+    if (doc.containsKey("park_effect_speed")) {
+        parkEffectSpeed = doc["park_effect_speed"];
+        saveSettings(); // Auto-save
+    }
+    if (doc.containsKey("park_headlight_color_r")) {
+        parkHeadlightColor.r = doc["park_headlight_color_r"];
+        saveSettings(); // Auto-save
+    }
+    if (doc.containsKey("park_headlight_color_g")) {
+        parkHeadlightColor.g = doc["park_headlight_color_g"];
+        saveSettings(); // Auto-save
+    }
+    if (doc.containsKey("park_headlight_color_b")) {
+        parkHeadlightColor.b = doc["park_headlight_color_b"];
+        saveSettings(); // Auto-save
+    }
+    if (doc.containsKey("park_taillight_color_r")) {
+        parkTaillightColor.r = doc["park_taillight_color_r"];
+        saveSettings(); // Auto-save
+    }
+    if (doc.containsKey("park_taillight_color_g")) {
+        parkTaillightColor.g = doc["park_taillight_color_g"];
+        saveSettings(); // Auto-save
+    }
+    if (doc.containsKey("park_taillight_color_b")) {
+        parkTaillightColor.b = doc["park_taillight_color_b"];
+        saveSettings(); // Auto-save
+    }
+    if (doc.containsKey("park_brightness")) {
+        parkBrightness = doc["park_brightness"];
+        saveSettings(); // Auto-save
+    }
+    if (doc.containsKey("braking_enabled")) {
+        brakingEnabled = doc["braking_enabled"];
+        saveSettings(); // Auto-save
+    }
+    if (doc.containsKey("manualBrake")) {
+        bool manual = doc["manualBrake"];
+        manualBrakeActive = manual;
+        brakingActive = manual;
+        brakingStartTime = millis();
+        brakingFlashCount = 0;
+        brakingPulseCount = 0;
+        if (!manual) {
+            resetToNormalEffects();
+        }
+    }
+    if (doc.containsKey("braking_threshold")) {
+        brakingThreshold = doc["braking_threshold"];
+        saveSettings(); // Auto-save
+    }
+    if (doc.containsKey("braking_effect")) {
+        brakingEffect = doc["braking_effect"];
+        saveSettings(); // Auto-save
+    }
+    if (doc.containsKey("braking_brightness")) {
+        brakingBrightness = doc["braking_brightness"] | 255;
+        Serial.printf("🛑 Braking brightness: %d\n", brakingBrightness);
+        saveSettings(); // Auto-save
+    }
+    if (doc.containsKey("direction_based_lighting")) {
+        directionBasedLighting = doc["direction_based_lighting"];
+        saveSettings(); // Auto-save
+    }
+    if (doc.containsKey("headlight_mode")) {
+        headlightMode = doc["headlight_mode"];
+        saveSettings(); // Auto-save
+    }
+    if (doc.containsKey("forward_accel_threshold")) {
+        forwardAccelThreshold = doc["forward_accel_threshold"];
+        saveSettings(); // Auto-save
+    }
+    if (doc.containsKey("rgbw_white_mode")) {
+        setRgbwWhiteMode(doc["rgbw_white_mode"] | 0);
+        saveSettings(); // Auto-save
+    }
+    if (doc.containsKey("white_leds_enabled") && !doc.containsKey("rgbw_white_mode")) {
+        setRgbwWhiteMode(doc["white_leds_enabled"] ? 1 : 0);
+        saveSettings(); // Auto-save
+    }
+    if (doc.containsKey("headlightColor")) {
+        String colorHex = doc["headlightColor"];
+        uint32_t color = strtol(colorHex.c_str(), NULL, 16);
+        headlightColor = CRGB((color >> 16) & 0xFF, (color >> 8) & 0xFF, color & 0xFF);
+        saveSettings(); // Auto-save
+    }
+    if (doc.containsKey("taillightColor")) {
+        String colorHex = doc["taillightColor"];
+        uint32_t color = strtol(colorHex.c_str(), NULL, 16);
+        taillightColor = CRGB((color >> 16) & 0xFF, (color >> 8) & 0xFF, color & 0xFF);
+        saveSettings(); // Auto-save
+    }
+    if (doc.containsKey("headlightBackgroundColor")) {
+        String colorHex = doc["headlightBackgroundColor"];
+        uint32_t color = strtol(colorHex.c_str(), NULL, 16);
+        headlightBackgroundColor = CRGB((color >> 16) & 0xFF, (color >> 8) & 0xFF, color & 0xFF);
+        saveSettings(); // Auto-save
+    }
+    if (doc.containsKey("taillightBackgroundColor")) {
+        String colorHex = doc["taillightBackgroundColor"];
+        uint32_t color = strtol(colorHex.c_str(), NULL, 16);
+        taillightBackgroundColor = CRGB((color >> 16) & 0xFF, (color >> 8) & 0xFF, color & 0xFF);
+        saveSettings(); // Auto-save
+    }
+    if (doc.containsKey("headlightBackgroundEnabled")) {
+        headlightBackgroundEnabled = doc["headlightBackgroundEnabled"];
+        saveSettings(); // Auto-save
+    }
+    if (doc.containsKey("taillightBackgroundEnabled")) {
+        taillightBackgroundEnabled = doc["taillightBackgroundEnabled"];
+        saveSettings(); // Auto-save
+    }
+    if (doc.containsKey("headlightEffect")) {
+        headlightEffect = doc["headlightEffect"];
+        saveSettings(); // Auto-save
+    }
+    if (doc.containsKey("taillightEffect")) {
+        taillightEffect = doc["taillightEffect"];
+        saveSettings(); // Auto-save
+    }
+    
+    // ESPNow API
+    if (doc.containsKey("enableESPNow")) {
+        enableESPNow = doc["enableESPNow"];
+        saveSettings(); // Auto-save
+        if (enableESPNow) {
+            initESPNow();
+        } else {
+            deinitESPNow();
+        }
+    }
+    if (doc.containsKey("useESPNowSync")) {
+        useESPNowSync = doc["useESPNowSync"];
+        saveSettings(); // Auto-save
+    }
+    if (doc.containsKey("espNowChannel")) {
+        uint8_t newChannel = doc["espNowChannel"];
+        if (newChannel != espNowChannel) {
+            espNowChannel = newChannel;
+            saveSettings(); // Auto-save
+            updateSoftAPChannel();
+            if (enableESPNow) {
+                initESPNow();
+            }
+        }
+    }
+    
+    // Group Management API
+    if (doc.containsKey("deviceName")) {
+        deviceName = doc["deviceName"].as<String>();
+        saveSettings(); // Auto-save
+    }
+    if (doc.containsKey("groupAction")) {
+        String action = doc["groupAction"].as<String>();
+        if (action == "create") {
+            String code = doc["groupCode"] | "";
+            groupCode = code;
+            if (groupCode.length() != 6) {
+                groupCode = "";
+                generateGroupCode();
+            }
+            isGroupMaster = true;
+            allowGroupJoin = true;
+            hasGroupMaster = true;
+            autoJoinOnHeartbeat = false;
+            joinInProgress = false;
+            groupMemberCount = 0;
+            esp_wifi_get_mac(WIFI_IF_STA, groupMasterMac);
+            // Add self as a group member when creating a group
+            uint8_t mac[6];
+            esp_wifi_get_mac(WIFI_IF_STA, mac);
+            addGroupMember(mac, deviceName.c_str());
+            Serial.printf("Group: Created with code %s and joined as master\n", groupCode.c_str());
+        } else if (action == "join" && doc.containsKey("groupCode")) {
+            String code = doc["groupCode"].as<String>();
+            if (code.length() == 6) {
+                groupCode = code;
+                isGroupMaster = false;
+                hasGroupMaster = false;
+                autoJoinOnHeartbeat = false;
+                joinInProgress = true;
+                memset(groupMasterMac, 0, sizeof(groupMasterMac));
+                groupMemberCount = 0;
+                sendJoinRequest();
+                Serial.printf("Group: Attempting to join with code %s\n", groupCode.c_str());
+            }
+        } else if (action == "scan_join") {
+            groupCode = "";
+            isGroupMaster = false;
+            hasGroupMaster = false;
+            allowGroupJoin = false;
+            autoJoinOnHeartbeat = true;
+            joinInProgress = false;
+            memset(groupMasterMac, 0, sizeof(groupMasterMac));
+            groupMemberCount = 0;
+            Serial.println("Group: Scanning for group heartbeat to join");
+        } else if (action == "leave") {
+            groupCode = "";
+            isGroupMaster = false;
+            allowGroupJoin = false;
+            groupMemberCount = 0;
+            hasGroupMaster = false;
+            autoJoinOnHeartbeat = false;
+            joinInProgress = false;
+            memset(groupMasterMac, 0, sizeof(groupMasterMac));
+            Serial.println("Group: Left group");
+        } else if (action == "allow_join") {
+            allowGroupJoin = true;
+            Serial.println("Group: Join requests enabled");
+        } else if (action == "block_join") {
+            allowGroupJoin = false;
+            Serial.println("Group: Join requests disabled");
+        }
+        saveSettings(); // Auto-save
+    }
+
+    // WiFi settings
+    if (doc.containsKey("apName")) {
+        apName = doc["apName"].as<String>();
+        Serial.printf("🔧 WiFi AP Name updated to: %s\n", apName.c_str());
+        saveSettings(); // Auto-save
+    }
+    if (doc.containsKey("apPassword")) {
+        apPassword = doc["apPassword"].as<String>();
+        Serial.printf("🔧 WiFi AP Password updated to: %s\n", apPassword.c_str());
+        saveSettings(); // Auto-save
+    }
+
+    if (doc.containsKey("restart") && doc["restart"]) {
+        shouldRestart = allowRestart;
+    }
+
+    return true;
+}
+
+int parseBleContentLength(const String& headers) {
+    String lowerHeaders = headers;
+    lowerHeaders.toLowerCase();
+    int index = lowerHeaders.indexOf("content-length:");
+    if (index == -1) {
+        return -1;
+    }
+    int valueStart = index + 15;
+    while (valueStart < lowerHeaders.length() && lowerHeaders.charAt(valueStart) == ' ') {
+        valueStart++;
+    }
+    int valueEnd = lowerHeaders.indexOf("\r\n", valueStart);
+    if (valueEnd == -1) {
+        valueEnd = lowerHeaders.length();
+    }
+    String value = lowerHeaders.substring(valueStart, valueEnd);
+    return value.toInt();
+}
+
+void appendBleRequestChunk(const String& chunk) {
+    bleRequestBuffer += chunk;
+    if (bleRequestBuffer.length() > 8192) {
+        Serial.println("BLE: Request buffer overflow, resetting");
+        bleRequestBuffer = "";
+        bleRequestBodyLength = -1;
+    }
+}
+
+bool consumeBleRequest(String& requestOut) {
+    int headerEnd = bleRequestBuffer.indexOf("\r\n\r\n");
+    if (headerEnd == -1) {
+        return false;
+    }
+
+    String headers = bleRequestBuffer.substring(0, headerEnd);
+    if (bleRequestBodyLength < 0) {
+        bleRequestBodyLength = parseBleContentLength(headers);
+    }
+
+    bool isGet = headers.startsWith("GET ");
+    if (isGet) {
+        requestOut = bleRequestBuffer.substring(0, headerEnd + 4);
+        bleRequestBuffer = bleRequestBuffer.substring(headerEnd + 4);
+        bleRequestBodyLength = -1;
+        return true;
+    }
+
+    if (bleRequestBodyLength < 0) {
+        return false;
+    }
+
+    int totalLength = headerEnd + 4 + bleRequestBodyLength;
+    if (bleRequestBuffer.length() < totalLength) {
+        return false;
+    }
+
+    requestOut = bleRequestBuffer.substring(0, totalLength);
+    bleRequestBuffer = bleRequestBuffer.substring(totalLength);
+    bleRequestBodyLength = -1;
+    return true;
+}
+
+void sendBleResponse(const String& response) {
+    if (!pCharacteristic) {
+        return;
+    }
+
+    // Use conservative chunk size to fit default BLE MTU (23 bytes -> 20 payload).
+    const size_t chunkSize = 20;
+    for (size_t offset = 0; offset < response.length(); offset += chunkSize) {
+        String chunk = response.substring(offset, offset + chunkSize);
+        pCharacteristic->setValue(chunk.c_str());
+        pCharacteristic->notify();
+        delay(10);
+    }
+}
+
+uint16_t crc16Ccitt(const uint8_t* data, size_t length) {
+    uint16_t crc = 0xFFFF;
+    for (size_t i = 0; i < length; i++) {
+        crc ^= (uint16_t)data[i] << 8;
+        for (uint8_t bit = 0; bit < 8; bit++) {
+            if (crc & 0x8000) {
+                crc = (crc << 1) ^ 0x1021;
+            } else {
+                crc <<= 1;
+            }
+        }
+    }
+    return crc;
+}
+
+bool tryExtractBleFrame(std::string& buffer, BleFrame& frame) {
+    if (buffer.size() < BLE_FRAME_HEADER_SIZE + BLE_FRAME_CRC_SIZE) {
+        return false;
+    }
+
+    size_t start = std::string::npos;
+    for (size_t i = 0; i + 1 < buffer.size(); i++) {
+        if ((uint8_t)buffer[i] == BLE_FRAME_MAGIC0 && (uint8_t)buffer[i + 1] == BLE_FRAME_MAGIC1) {
+            start = i;
+            break;
+        }
+    }
+
+    if (start == std::string::npos) {
+        buffer.clear();
+        return false;
+    }
+
+    if (start > 0) {
+        buffer.erase(0, start);
+    }
+
+    if (buffer.size() < BLE_FRAME_HEADER_SIZE + BLE_FRAME_CRC_SIZE) {
+        return false;
+    }
+
+    if ((uint8_t)buffer[2] != BLE_FRAME_VERSION) {
+        buffer.erase(0, 2);
+        return false;
+    }
+
+    uint16_t payloadLength = (uint8_t)buffer[6] | ((uint16_t)(uint8_t)buffer[7] << 8);
+    size_t frameSize = BLE_FRAME_HEADER_SIZE + payloadLength + BLE_FRAME_CRC_SIZE;
+    if (buffer.size() < frameSize) {
+        return false;
+    }
+
+    const uint8_t* frameBytes = reinterpret_cast<const uint8_t*>(buffer.data());
+    uint16_t expectedCrc = (uint8_t)buffer[frameSize - 2] | ((uint16_t)(uint8_t)buffer[frameSize - 1] << 8);
+    uint16_t actualCrc = crc16Ccitt(frameBytes, frameSize - BLE_FRAME_CRC_SIZE);
+    if (expectedCrc != actualCrc) {
+        buffer.erase(0, 2);
+        return false;
+    }
+
+    frame.type = (uint8_t)buffer[3];
+    frame.seq = (uint8_t)buffer[4];
+    frame.flags = (uint8_t)buffer[5];
+    frame.payload.assign(buffer.data() + BLE_FRAME_HEADER_SIZE, buffer.data() + BLE_FRAME_HEADER_SIZE + payloadLength);
+    buffer.erase(0, frameSize);
+    return true;
+}
+
+void sendBleFrame(uint8_t type, uint8_t seq, uint8_t flags, const uint8_t* payload, uint16_t length) {
+    if (!pCharacteristic) {
+        return;
+    }
+
+    std::string frame;
+    frame.reserve(BLE_FRAME_HEADER_SIZE + length + BLE_FRAME_CRC_SIZE);
+    frame.push_back((char)BLE_FRAME_MAGIC0);
+    frame.push_back((char)BLE_FRAME_MAGIC1);
+    frame.push_back((char)BLE_FRAME_VERSION);
+    frame.push_back((char)type);
+    frame.push_back((char)seq);
+    frame.push_back((char)flags);
+    frame.push_back((char)(length & 0xFF));
+    frame.push_back((char)((length >> 8) & 0xFF));
+    if (payload && length > 0) {
+        frame.append(reinterpret_cast<const char*>(payload), length);
+    }
+
+    uint16_t crc = crc16Ccitt(reinterpret_cast<const uint8_t*>(frame.data()), frame.size());
+    frame.push_back((char)(crc & 0xFF));
+    frame.push_back((char)((crc >> 8) & 0xFF));
+
+    const size_t chunkSize = 180; // Fits within MTU 185 (payload <= 182)
+    for (size_t offset = 0; offset < frame.size(); offset += chunkSize) {
+        size_t chunkLen = min(chunkSize, frame.size() - offset);
+        pCharacteristic->setValue((uint8_t*)frame.data() + offset, chunkLen);
+        pCharacteristic->notify();
+        delay(10);
+    }
+}
+
+void sendBleAck(uint8_t seq) {
+    sendBleFrame(BLE_MSG_ACK, seq, 0, nullptr, 0);
+}
+
+void sendBleError(uint8_t seq, const String& message) {
+    String payload = "{\"error\":\"" + message + "\"}";
+    sendBleFrame(
+        BLE_MSG_ERROR,
+        seq,
+        0,
+        reinterpret_cast<const uint8_t*>(payload.c_str()),
+        payload.length()
+    );
+}
+
+String getOtaStatusJSON() {
+    DynamicJsonDocument doc(256);
+    doc["ota_update_url"] = otaUpdateURL;
+    doc["ota_in_progress"] = otaInProgress;
+    doc["ota_progress"] = otaProgress;
+    doc["ota_status"] = otaStatus;
+    doc["ota_error"] = otaError;
+    String jsonString;
+    serializeJson(doc, jsonString);
+    return jsonString;
+}
+
 // Old handleRoot function removed - now using external UI files
 void handleAPI() {
     if (server.hasArg("plain")) {
@@ -4849,6 +5910,27 @@ void handleAPI() {
         
         if (doc.containsKey("preset")) {
             setPreset(doc["preset"]);
+            saveSettings(); // Auto-save
+        }
+        if (doc.containsKey("presetAction")) {
+            String action = doc["presetAction"].as<String>();
+            if (action == "save") {
+                String name = doc["presetName"] | "Custom Preset";
+                if (addPreset(name)) {
+                    saveSettings();
+                }
+            } else if (action == "update") {
+                int index = doc["presetIndex"] | -1;
+                String name = doc["presetName"] | "";
+                if (index >= 0 && updatePreset((uint8_t)index, name)) {
+                    saveSettings();
+                }
+            } else if (action == "delete") {
+                int index = doc["presetIndex"] | -1;
+                if (index >= 0 && deletePreset((uint8_t)index)) {
+                    saveSettings();
+                }
+            }
         }
         if (doc.containsKey("brightness")) {
             globalBrightness = doc["brightness"];
@@ -5062,33 +6144,43 @@ void handleAPI() {
             Serial.printf("🛑 Braking brightness: %d\n", brakingBrightness);
             #endif
         }
+        if (doc.containsKey("manualBlinker")) {
+            String manual = doc["manualBlinker"].as<String>();
+            if (manual == "left" || manual == "right") {
+                manualBlinkerActive = true;
+                blinkerActive = true;
+                blinkerDirection = (manual == "right") ? 1 : -1;
+                blinkerStartTime = millis();
+            } else if (manual == "off") {
+                manualBlinkerActive = false;
+                blinkerActive = false;
+                blinkerDirection = 0;
+                blinkerStartTime = 0;
+                resetToNormalEffects();
+            }
+        }
+        if (doc.containsKey("manualBrake")) {
+            bool manual = doc["manualBrake"];
+            manualBrakeActive = manual;
+            brakingActive = manual;
+            brakingStartTime = millis();
+            brakingFlashCount = 0;
+            brakingPulseCount = 0;
+            if (!manual) {
+                resetToNormalEffects();
+            }
+        }
         
-        // Dedicated white LED control API
-        if (doc.containsKey("white_leds_enabled")) {
-            whiteLEDsEnabled = doc["white_leds_enabled"] | false;
-            updateWhiteLEDs(); // Update immediately
+        // RGBW white channel control
+        if (doc.containsKey("rgbw_white_mode")) {
+            setRgbwWhiteMode(doc["rgbw_white_mode"] | 0);
             saveSettings(); // Auto-save
-            Serial.printf("💡 White LEDs: %s\n", whiteLEDsEnabled ? "enabled" : "disabled");
+            Serial.printf("💡 RGBW white mode: %d\n", rgbwWhiteMode);
         }
-        if (doc.containsKey("headlight_white_enabled")) {
-            headlightWhiteEnabled = doc["headlight_white_enabled"] | true;
-            updateWhiteLEDs(); // Update immediately
+        if (doc.containsKey("white_leds_enabled") && !doc.containsKey("rgbw_white_mode")) {
+            setRgbwWhiteMode((doc["white_leds_enabled"] | false) ? 1 : 0);
             saveSettings(); // Auto-save
-        }
-        if (doc.containsKey("taillight_white_enabled")) {
-            taillightWhiteEnabled = doc["taillight_white_enabled"] | true;
-            updateWhiteLEDs(); // Update immediately
-            saveSettings(); // Auto-save
-        }
-        if (doc.containsKey("headlight_white_brightness")) {
-            headlightWhiteBrightness = doc["headlight_white_brightness"] | 255;
-            updateWhiteLEDs(); // Update immediately
-            saveSettings(); // Auto-save
-        }
-        if (doc.containsKey("taillight_white_brightness")) {
-            taillightWhiteBrightness = doc["taillight_white_brightness"] | 255;
-            updateWhiteLEDs(); // Update immediately
-            saveSettings(); // Auto-save
+            Serial.printf("💡 RGBW white channel: %s\n", whiteLEDsEnabled ? "enabled" : "disabled");
         }
         
         // OTA Update API
@@ -5164,6 +6256,8 @@ void handleAPI() {
             saveSettings(); // Auto-save
             if (enableESPNow) {
                 initESPNow();
+            } else {
+                deinitESPNow();
             }
         }
         if (doc.containsKey("useESPNowSync")) {
@@ -5171,8 +6265,15 @@ void handleAPI() {
             saveSettings(); // Auto-save
         }
         if (doc.containsKey("espNowChannel")) {
-            espNowChannel = doc["espNowChannel"];
-            saveSettings(); // Auto-save
+            uint8_t newChannel = doc["espNowChannel"];
+            if (newChannel != espNowChannel) {
+                espNowChannel = newChannel;
+                saveSettings(); // Auto-save
+                updateSoftAPChannel();
+                if (enableESPNow) {
+                    initESPNow();
+                }
+            }
         }
         
         // Group Management API
@@ -5182,37 +6283,56 @@ void handleAPI() {
         }
         if (doc.containsKey("groupAction")) {
             String action = doc["groupAction"].as<String>();
-            if (action == "create" && doc.containsKey("groupCode")) {
-                String code = doc["groupCode"].as<String>();
-                if (code.length() == 6) {
-                    groupCode = code;
-                    isGroupMaster = true;
-                    allowGroupJoin = true;
-                    hasGroupMaster = true;
-                    esp_wifi_get_mac(WIFI_IF_STA, groupMasterMac);
-                    // Add self as a group member when creating a group
-                    uint8_t mac[6];
-                    esp_wifi_get_mac(WIFI_IF_STA, mac);
-                    addGroupMember(mac, deviceName.c_str());
-                    Serial.printf("Group: Created with code %s and joined as master\n", groupCode.c_str());
+            if (action == "create") {
+                String code = doc["groupCode"] | "";
+                groupCode = code;
+                if (groupCode.length() != 6) {
+                    groupCode = "";
+                    generateGroupCode();
                 }
+                isGroupMaster = true;
+                allowGroupJoin = true;
+                hasGroupMaster = true;
+                autoJoinOnHeartbeat = false;
+                joinInProgress = false;
+                groupMemberCount = 0;
+                esp_wifi_get_mac(WIFI_IF_STA, groupMasterMac);
+                // Add self as a group member when creating a group
+                uint8_t mac[6];
+                esp_wifi_get_mac(WIFI_IF_STA, mac);
+                addGroupMember(mac, deviceName.c_str());
+                Serial.printf("Group: Created with code %s and joined as master\n", groupCode.c_str());
             } else if (action == "join" && doc.containsKey("groupCode")) {
                 String code = doc["groupCode"].as<String>();
                 if (code.length() == 6) {
                     groupCode = code;
                     isGroupMaster = false;
                     hasGroupMaster = false;
+                    autoJoinOnHeartbeat = false;
+                    joinInProgress = true;
                     memset(groupMasterMac, 0, sizeof(groupMasterMac));
                     groupMemberCount = 0;
                     sendJoinRequest();
                     Serial.printf("Group: Attempting to join with code %s\n", groupCode.c_str());
                 }
+            } else if (action == "scan_join") {
+                groupCode = "";
+                isGroupMaster = false;
+                hasGroupMaster = false;
+                allowGroupJoin = false;
+                autoJoinOnHeartbeat = true;
+                joinInProgress = false;
+                memset(groupMasterMac, 0, sizeof(groupMasterMac));
+                groupMemberCount = 0;
+                Serial.println("Group: Scanning for group heartbeat to join");
             } else if (action == "leave") {
                 groupCode = "";
                 isGroupMaster = false;
                 allowGroupJoin = false;
                 groupMemberCount = 0;
                 hasGroupMaster = false;
+                autoJoinOnHeartbeat = false;
+                joinInProgress = false;
                 memset(groupMasterMac, 0, sizeof(groupMasterMac));
                 Serial.println("Group: Left group");
             } else if (action == "allow_join") {
@@ -5233,7 +6353,7 @@ void handleAPI() {
 }
 
 void handleStatus() {
-    DynamicJsonDocument doc(2048);  // Increased size to ensure all fields fit
+    DynamicJsonDocument doc(4096);  // Increased size to include presets
     doc["preset"] = currentPreset;
     doc["brightness"] = globalBrightness;
     doc["effectSpeed"] = effectSpeed;
@@ -5260,6 +6380,7 @@ void handleStatus() {
     doc["braking_threshold"] = brakingThreshold;
     doc["braking_effect"] = brakingEffect;
     doc["braking_brightness"] = brakingBrightness;
+    doc["manual_brake_active"] = manualBrakeActive;
     
     doc["blinker_delay"] = blinkerDelay;
     doc["blinker_timeout"] = blinkerTimeout;
@@ -5279,6 +6400,7 @@ void handleStatus() {
     doc["park_brightness"] = parkBrightness;
     doc["blinker_active"] = blinkerActive;
     doc["blinker_direction"] = blinkerDirection;
+    doc["manual_blinker_active"] = manualBlinkerActive;
     doc["park_mode_active"] = parkModeActive;
     doc["calibration_complete"] = calibrationComplete;
     doc["calibration_mode"] = calibrationMode;
@@ -5317,10 +6439,22 @@ void handleStatus() {
     doc["enableESPNow"] = enableESPNow;
     doc["useESPNowSync"] = useESPNowSync;
     doc["espNowChannel"] = espNowChannel;
-    doc["espNowStatus"] = (espNowState == 1) ? "Active" : (espNowState == 2) ? "Error" : "Inactive";
+    doc["espNowStatus"] = (espNowState == 1)
+        ? "Active"
+        : (espNowState == 2)
+            ? ("Error (" + String(espNowLastError) + ")")
+            : "Inactive";
     doc["espNowPeerCount"] = espNowPeerCount;
     doc["espNowLastSend"] = (lastESPNowSend > 0) ? String((millis() - lastESPNowSend) / 1000) + "s ago" : "Never";
     
+    // Preset list
+    doc["presetCount"] = presetCount;
+    JsonArray presetArray = doc.createNestedArray("presets");
+    for (uint8_t i = 0; i < presetCount; i++) {
+        JsonObject presetObj = presetArray.createNestedObject();
+        presetObj["name"] = presets[i].name;
+    }
+
     // Group status
     doc["groupCode"] = groupCode;
     doc["isGroupMaster"] = isGroupMaster;
@@ -5334,12 +6468,9 @@ void handleStatus() {
     doc["bluetoothDeviceName"] = bluetoothDeviceName;
     doc["bluetoothConnected"] = deviceConnected;
     
-    // White LED status
+    // RGBW white channel status
+    doc["rgbw_white_mode"] = rgbwWhiteMode;
     doc["white_leds_enabled"] = whiteLEDsEnabled;
-    doc["headlight_white_enabled"] = headlightWhiteEnabled;
-    doc["taillight_white_enabled"] = taillightWhiteEnabled;
-    doc["headlight_white_brightness"] = headlightWhiteBrightness;
-    doc["taillight_white_brightness"] = taillightWhiteBrightness;
     
     server.sendHeader("Access-Control-Allow-Origin", "*");
     sendJSONResponse(doc);
@@ -5351,15 +6482,25 @@ String getStatusJSON() {
     
     // Essential status only for BLE (reduced data to prevent overflow)
     (*doc)["preset"] = currentPreset;
+    (*doc)["presetCount"] = presetCount;
+    JsonArray presetArray = doc->createNestedArray("presets");
+    for (uint8_t i = 0; i < presetCount; i++) {
+        JsonObject presetObj = presetArray.createNestedObject();
+        presetObj["name"] = presets[i].name;
+    }
     (*doc)["brightness"] = globalBrightness;
     (*doc)["effectSpeed"] = effectSpeed;
     (*doc)["motion_enabled"] = motionEnabled;
     (*doc)["blinker_enabled"] = blinkerEnabled;
     (*doc)["park_mode_enabled"] = parkModeEnabled;
-    (*doc)["headlightColor"] = String(headlightColor.r, HEX) + String(headlightColor.g, HEX) + String(headlightColor.b, HEX);
-    (*doc)["taillightColor"] = String(taillightColor.r, HEX) + String(taillightColor.g, HEX) + String(taillightColor.b, HEX);
+    (*doc)["headlightColor"] = formatColorHex(headlightColor);
+    (*doc)["taillightColor"] = formatColorHex(taillightColor);
     (*doc)["headlightEffect"] = headlightEffect;
     (*doc)["taillightEffect"] = taillightEffect;
+    (*doc)["headlightBackgroundEnabled"] = headlightBackgroundEnabled;
+    (*doc)["taillightBackgroundEnabled"] = taillightBackgroundEnabled;
+    (*doc)["headlightBackgroundColor"] = formatColorHex(headlightBackgroundColor);
+    (*doc)["taillightBackgroundColor"] = formatColorHex(taillightBackgroundColor);
     (*doc)["bluetoothEnabled"] = bluetoothEnabled;
     (*doc)["bluetoothDeviceName"] = bluetoothDeviceName;
     (*doc)["bluetoothConnected"] = deviceConnected;
@@ -5567,28 +6708,30 @@ void initializeLEDs() {
             // RGBWEmulatedController requires underlying controller to use RGB order
             // Color order conversion is handled in software via fillSolidWithColorOrder
             typedef SK6812<HEADLIGHT_PIN, RGB> HeadlightControllerT;
-            static RGBWEmulatedController<HeadlightControllerT, RGB> headlightRGBWController(Rgbw(kRGBWDefaultColorTemp, kRGBWExactColors, W3));
-            FastLED.addLeds(&headlightRGBWController, headlight, headlightLedCount);
+            static RGBWEmulatedController<HeadlightControllerT, RGB> headlightRGBWController(
+                Rgbw(kRGBWDefaultColorTemp, kRGBWNullWhitePixel, W3)
+            );
+            headlightController = &FastLED.addLeds(&headlightRGBWController, headlight, headlightLedCount);
             break;
         case 1: // SK6812 RGB - Use RGB only
-            if (headlightColorOrder == 0) FastLED.addLeds<SK6812, HEADLIGHT_PIN, RGB>(headlight, headlightLedCount);
-            else if (headlightColorOrder == 1) FastLED.addLeds<SK6812, HEADLIGHT_PIN, GRB>(headlight, headlightLedCount);
-            else if (headlightColorOrder == 2) FastLED.addLeds<SK6812, HEADLIGHT_PIN, BGR>(headlight, headlightLedCount);
+            if (headlightColorOrder == 0) headlightController = &FastLED.addLeds<SK6812, HEADLIGHT_PIN, RGB>(headlight, headlightLedCount);
+            else if (headlightColorOrder == 1) headlightController = &FastLED.addLeds<SK6812, HEADLIGHT_PIN, GRB>(headlight, headlightLedCount);
+            else if (headlightColorOrder == 2) headlightController = &FastLED.addLeds<SK6812, HEADLIGHT_PIN, BGR>(headlight, headlightLedCount);
             break;
         case 2: // WS2812B
-            if (headlightColorOrder == 0) FastLED.addLeds<WS2812B, HEADLIGHT_PIN, RGB>(headlight, headlightLedCount);
-            else if (headlightColorOrder == 1) FastLED.addLeds<WS2812B, HEADLIGHT_PIN, GRB>(headlight, headlightLedCount);
-            else if (headlightColorOrder == 2) FastLED.addLeds<WS2812B, HEADLIGHT_PIN, BGR>(headlight, headlightLedCount);
+            if (headlightColorOrder == 0) headlightController = &FastLED.addLeds<WS2812B, HEADLIGHT_PIN, RGB>(headlight, headlightLedCount);
+            else if (headlightColorOrder == 1) headlightController = &FastLED.addLeds<WS2812B, HEADLIGHT_PIN, GRB>(headlight, headlightLedCount);
+            else if (headlightColorOrder == 2) headlightController = &FastLED.addLeds<WS2812B, HEADLIGHT_PIN, BGR>(headlight, headlightLedCount);
             break;
         case 3: // APA102
-            if (headlightColorOrder == 0) FastLED.addLeds<APA102, HEADLIGHT_PIN, HEADLIGHT_CLOCK_PIN, RGB>(headlight, headlightLedCount);
-            else if (headlightColorOrder == 1) FastLED.addLeds<APA102, HEADLIGHT_PIN, HEADLIGHT_CLOCK_PIN, GRB>(headlight, headlightLedCount);
-            else FastLED.addLeds<APA102, HEADLIGHT_PIN, HEADLIGHT_CLOCK_PIN, BGR>(headlight, headlightLedCount);
+            if (headlightColorOrder == 0) headlightController = &FastLED.addLeds<APA102, HEADLIGHT_PIN, HEADLIGHT_CLOCK_PIN, RGB>(headlight, headlightLedCount);
+            else if (headlightColorOrder == 1) headlightController = &FastLED.addLeds<APA102, HEADLIGHT_PIN, HEADLIGHT_CLOCK_PIN, GRB>(headlight, headlightLedCount);
+            else headlightController = &FastLED.addLeds<APA102, HEADLIGHT_PIN, HEADLIGHT_CLOCK_PIN, BGR>(headlight, headlightLedCount);
             break;
         case 4: // LPD8806
-            if (headlightColorOrder == 0) FastLED.addLeds<LPD8806, HEADLIGHT_PIN, HEADLIGHT_CLOCK_PIN, RGB>(headlight, headlightLedCount);
-            else if (headlightColorOrder == 1) FastLED.addLeds<LPD8806, HEADLIGHT_PIN, HEADLIGHT_CLOCK_PIN, GRB>(headlight, headlightLedCount);
-            else FastLED.addLeds<LPD8806, HEADLIGHT_PIN, HEADLIGHT_CLOCK_PIN, BGR>(headlight, headlightLedCount);
+            if (headlightColorOrder == 0) headlightController = &FastLED.addLeds<LPD8806, HEADLIGHT_PIN, HEADLIGHT_CLOCK_PIN, RGB>(headlight, headlightLedCount);
+            else if (headlightColorOrder == 1) headlightController = &FastLED.addLeds<LPD8806, HEADLIGHT_PIN, HEADLIGHT_CLOCK_PIN, GRB>(headlight, headlightLedCount);
+            else headlightController = &FastLED.addLeds<LPD8806, HEADLIGHT_PIN, HEADLIGHT_CLOCK_PIN, BGR>(headlight, headlightLedCount);
             break;
     }
     
@@ -5597,88 +6740,69 @@ void initializeLEDs() {
             // RGBWEmulatedController requires underlying controller to use RGB order
             // Color order conversion is handled in software via fillSolidWithColorOrder
             typedef SK6812<TAILLIGHT_PIN, RGB> TaillightControllerT;
-            static RGBWEmulatedController<TaillightControllerT, RGB> taillightRGBWController(Rgbw(kRGBWDefaultColorTemp, kRGBWExactColors, W3));
-            FastLED.addLeds(&taillightRGBWController, taillight, taillightLedCount);
+            static RGBWEmulatedController<TaillightControllerT, RGB> taillightRGBWController(
+                Rgbw(kRGBWDefaultColorTemp, kRGBWNullWhitePixel, W3)
+            );
+            taillightController = &FastLED.addLeds(&taillightRGBWController, taillight, taillightLedCount);
             break;
         case 1: // SK6812 RGB - Use RGB only
-            if (taillightColorOrder == 0) FastLED.addLeds<SK6812, TAILLIGHT_PIN, RGB>(taillight, taillightLedCount);
-            else if (taillightColorOrder == 1) FastLED.addLeds<SK6812, TAILLIGHT_PIN, GRB>(taillight, taillightLedCount);
-            else if (taillightColorOrder == 2) FastLED.addLeds<SK6812, TAILLIGHT_PIN, BGR>(taillight, taillightLedCount);
+            if (taillightColorOrder == 0) taillightController = &FastLED.addLeds<SK6812, TAILLIGHT_PIN, RGB>(taillight, taillightLedCount);
+            else if (taillightColorOrder == 1) taillightController = &FastLED.addLeds<SK6812, TAILLIGHT_PIN, GRB>(taillight, taillightLedCount);
+            else if (taillightColorOrder == 2) taillightController = &FastLED.addLeds<SK6812, TAILLIGHT_PIN, BGR>(taillight, taillightLedCount);
             break;
         case 2: // WS2812B
-            if (taillightColorOrder == 0) FastLED.addLeds<WS2812B, TAILLIGHT_PIN, RGB>(taillight, taillightLedCount);
-            else if (taillightColorOrder == 1) FastLED.addLeds<WS2812B, TAILLIGHT_PIN, GRB>(taillight, taillightLedCount);
-            else if (taillightColorOrder == 2) FastLED.addLeds<WS2812B, TAILLIGHT_PIN, BGR>(taillight, taillightLedCount);
+            if (taillightColorOrder == 0) taillightController = &FastLED.addLeds<WS2812B, TAILLIGHT_PIN, RGB>(taillight, taillightLedCount);
+            else if (taillightColorOrder == 1) taillightController = &FastLED.addLeds<WS2812B, TAILLIGHT_PIN, GRB>(taillight, taillightLedCount);
+            else if (taillightColorOrder == 2) taillightController = &FastLED.addLeds<WS2812B, TAILLIGHT_PIN, BGR>(taillight, taillightLedCount);
             break;
         case 3: // APA102
-            if (taillightColorOrder == 0) FastLED.addLeds<APA102, TAILLIGHT_PIN, TAILLIGHT_CLOCK_PIN, RGB>(taillight, taillightLedCount);
-            else if (taillightColorOrder == 1) FastLED.addLeds<APA102, TAILLIGHT_PIN, TAILLIGHT_CLOCK_PIN, GRB>(taillight, taillightLedCount);
-            else FastLED.addLeds<APA102, TAILLIGHT_PIN, TAILLIGHT_CLOCK_PIN, BGR>(taillight, taillightLedCount);
+            if (taillightColorOrder == 0) taillightController = &FastLED.addLeds<APA102, TAILLIGHT_PIN, TAILLIGHT_CLOCK_PIN, RGB>(taillight, taillightLedCount);
+            else if (taillightColorOrder == 1) taillightController = &FastLED.addLeds<APA102, TAILLIGHT_PIN, TAILLIGHT_CLOCK_PIN, GRB>(taillight, taillightLedCount);
+            else taillightController = &FastLED.addLeds<APA102, TAILLIGHT_PIN, TAILLIGHT_CLOCK_PIN, BGR>(taillight, taillightLedCount);
             break;
         case 4: // LPD8806
-            if (taillightColorOrder == 0) FastLED.addLeds<LPD8806, TAILLIGHT_PIN, TAILLIGHT_CLOCK_PIN, RGB>(taillight, taillightLedCount);
-            else if (taillightColorOrder == 1) FastLED.addLeds<LPD8806, TAILLIGHT_PIN, TAILLIGHT_CLOCK_PIN, GRB>(taillight, taillightLedCount);
-            else FastLED.addLeds<LPD8806, TAILLIGHT_PIN, TAILLIGHT_CLOCK_PIN, BGR>(taillight, taillightLedCount);
+            if (taillightColorOrder == 0) taillightController = &FastLED.addLeds<LPD8806, TAILLIGHT_PIN, TAILLIGHT_CLOCK_PIN, RGB>(taillight, taillightLedCount);
+            else if (taillightColorOrder == 1) taillightController = &FastLED.addLeds<LPD8806, TAILLIGHT_PIN, TAILLIGHT_CLOCK_PIN, GRB>(taillight, taillightLedCount);
+            else taillightController = &FastLED.addLeds<LPD8806, TAILLIGHT_PIN, TAILLIGHT_CLOCK_PIN, BGR>(taillight, taillightLedCount);
             break;
     }
+
+    applyRgbwWhiteChannelMode();
     
     FastLED.setBrightness(globalBrightness);
     Serial.printf("LED strips initialized successfully! Headlight: %d LEDs, Taillight: %d LEDs\n", headlightLedCount, taillightLedCount);
 }
 
-// Initialize dedicated white LEDs (AO3400 MOSFET control)
-void initializeWhiteLEDs() {
-    // Configure PWM channels for white LED control
-    // ESP32 LEDC: channel, frequency, resolution
-    ledcSetup(WHITE_LED_PWM_CHANNEL_HEADLIGHT, WHITE_LED_PWM_FREQ, WHITE_LED_PWM_RESOLUTION);
-    ledcSetup(WHITE_LED_PWM_CHANNEL_TAILLIGHT, WHITE_LED_PWM_FREQ, WHITE_LED_PWM_RESOLUTION);
-    
-    // Attach pins to PWM channels
-    ledcAttachPin(HEADLIGHT_WHITE_PIN, WHITE_LED_PWM_CHANNEL_HEADLIGHT);
-    ledcAttachPin(TAILLIGHT_WHITE_PIN, WHITE_LED_PWM_CHANNEL_TAILLIGHT);
-    
-    // Initialize to off (AO3400 is N-channel low-side)
-    // For PWM: 0 = off, 255 = fully on
-    ledcWrite(WHITE_LED_PWM_CHANNEL_HEADLIGHT, 0); // Off
-    ledcWrite(WHITE_LED_PWM_CHANNEL_TAILLIGHT, 0); // Off
-    
-    Serial.println("✅ White LEDs initialized (AO3400 MOSFET control)");
-    Serial.printf("   Headlight white: GPIO %d (Channel %d)\n", HEADLIGHT_WHITE_PIN, WHITE_LED_PWM_CHANNEL_HEADLIGHT);
-    Serial.printf("   Taillight white: GPIO %d (Channel %d)\n", TAILLIGHT_WHITE_PIN, WHITE_LED_PWM_CHANNEL_TAILLIGHT);
+void applyRgbwWhiteChannelMode() {
+    Rgbw rgbwMode = Rgbw(kRGBWDefaultColorTemp, kRGBWNullWhitePixel, W3);
+
+    switch (rgbwWhiteMode) {
+        case 1:
+            rgbwMode = Rgbw(kRGBWDefaultColorTemp, kRGBWExactColors, W3);
+            break;
+        case 2:
+            rgbwMode = Rgbw(kRGBWDefaultColorTemp, kRGBWBoostedWhite, W3);
+            break;
+        case 3:
+            rgbwMode = Rgbw(kRGBWDefaultColorTemp, kRGBWMaxBrightness, W3);
+            break;
+        default:
+            rgbwMode = Rgbw(kRGBWDefaultColorTemp, kRGBWNullWhitePixel, W3);
+            break;
+    }
+
+    if (headlightController) {
+        headlightController->setRgbw(rgbwMode);
+    }
+    if (taillightController) {
+        taillightController->setRgbw(rgbwMode);
+    }
 }
 
-// Update white LED brightness based on settings
-void updateWhiteLEDs() {
-    if (!whiteLEDsEnabled) {
-        // Master disable: turn off both white LEDs
-        ledcWrite(WHITE_LED_PWM_CHANNEL_HEADLIGHT, 0); // Off
-        ledcWrite(WHITE_LED_PWM_CHANNEL_TAILLIGHT, 0); // Off
-        return;
-    }
-    
-    // Headlight white LED control
-    if (headlightWhiteEnabled) {
-        // Direct brightness: 0 = off, 255 = fully on
-        uint8_t headlightPwm = headlightWhiteBrightness;
-#if WHITE_LED_TEST_LIMIT_BRIGHTNESS > 0
-        headlightPwm = min(headlightPwm, (uint8_t)WHITE_LED_TEST_LIMIT_BRIGHTNESS);
-#endif
-        ledcWrite(WHITE_LED_PWM_CHANNEL_HEADLIGHT, headlightPwm);
-    } else {
-        ledcWrite(WHITE_LED_PWM_CHANNEL_HEADLIGHT, 0); // Off
-    }
-    
-    // Taillight white LED control
-    if (taillightWhiteEnabled) {
-        // Direct brightness: 0 = off, 255 = fully on
-        uint8_t taillightPwm = taillightWhiteBrightness;
-#if WHITE_LED_TEST_LIMIT_BRIGHTNESS > 0
-        taillightPwm = min(taillightPwm, (uint8_t)WHITE_LED_TEST_LIMIT_BRIGHTNESS);
-#endif
-        ledcWrite(WHITE_LED_PWM_CHANNEL_TAILLIGHT, taillightPwm);
-    } else {
-        ledcWrite(WHITE_LED_PWM_CHANNEL_TAILLIGHT, 0); // Off
-    }
+void setRgbwWhiteMode(uint8_t mode) {
+    rgbwWhiteMode = min(mode, (uint8_t)3);
+    whiteLEDsEnabled = rgbwWhiteMode != 0;
+    applyRgbwWhiteChannelMode();
 }
 
 void testLEDConfiguration() {
@@ -5755,7 +6879,7 @@ void initFilesystem() {
 
 // Save all settings to filesystem
 bool saveSettings() {
-    DynamicJsonDocument doc(4096);
+    DynamicJsonDocument doc(8192);
     
     // Light settings
     doc["headlight_effect"] = headlightEffect;
@@ -5808,12 +6932,9 @@ bool saveSettings() {
     doc["braking_effect"] = brakingEffect;
     doc["braking_brightness"] = brakingBrightness;
     
-    // White LED settings
+    // RGBW white channel setting
+    doc["rgbw_white_mode"] = rgbwWhiteMode;
     doc["white_leds_enabled"] = whiteLEDsEnabled;
-    doc["headlight_white_enabled"] = headlightWhiteEnabled;
-    doc["taillight_white_enabled"] = taillightWhiteEnabled;
-    doc["headlight_white_brightness"] = headlightWhiteBrightness;
-    doc["taillight_white_brightness"] = taillightWhiteBrightness;
     
     // Park mode effect settings
     doc["park_effect"] = parkEffect;
@@ -5845,6 +6966,9 @@ bool saveSettings() {
     doc["enableESPNow"] = enableESPNow;
     doc["useESPNowSync"] = useESPNowSync;
     doc["espNowChannel"] = espNowChannel;
+
+    // Presets
+    savePresetsToDoc(doc);
     
     // Group settings
     doc["groupCode"] = groupCode;
@@ -5918,7 +7042,7 @@ bool saveSettingsToNVS() {
         return false;
     }
     
-    DynamicJsonDocument doc(4096);
+    DynamicJsonDocument doc(8192);
     
     // Light settings
     doc["headlight_effect"] = headlightEffect;
@@ -5971,12 +7095,9 @@ bool saveSettingsToNVS() {
     doc["braking_effect"] = brakingEffect;
     doc["braking_brightness"] = brakingBrightness;
     
-    // White LED settings
+    // RGBW white channel setting
+    doc["rgbw_white_mode"] = rgbwWhiteMode;
     doc["white_leds_enabled"] = whiteLEDsEnabled;
-    doc["headlight_white_enabled"] = headlightWhiteEnabled;
-    doc["taillight_white_enabled"] = taillightWhiteEnabled;
-    doc["headlight_white_brightness"] = headlightWhiteBrightness;
-    doc["taillight_white_brightness"] = taillightWhiteBrightness;
     
     // Park mode effect settings
     doc["park_effect"] = parkEffect;
@@ -6008,6 +7129,9 @@ bool saveSettingsToNVS() {
     doc["enableESPNow"] = enableESPNow;
     doc["useESPNowSync"] = useESPNowSync;
     doc["espNowChannel"] = espNowChannel;
+
+    // Presets
+    savePresetsToDoc(doc);
     
     // Group settings
     doc["groupCode"] = groupCode;
@@ -6166,12 +7290,9 @@ bool loadSettings() {
     brakingEffect = doc["braking_effect"] | 0;
     brakingBrightness = doc["braking_brightness"] | 255;
     
-    // Load white LED settings
-    whiteLEDsEnabled = doc["white_leds_enabled"] | false;
-    headlightWhiteEnabled = doc["headlight_white_enabled"] | true;
-    taillightWhiteEnabled = doc["taillight_white_enabled"] | true;
-    headlightWhiteBrightness = doc["headlight_white_brightness"] | 255;
-    taillightWhiteBrightness = doc["taillight_white_brightness"] | 255;
+    // Load RGBW white channel setting
+    rgbwWhiteMode = doc["rgbw_white_mode"] | (doc["white_leds_enabled"] | false ? 1 : 0);
+    whiteLEDsEnabled = rgbwWhiteMode != 0;
     
     // Load park mode effect settings
     parkEffect = doc["park_effect"] | FX_BREATH;
@@ -6204,8 +7325,14 @@ bool loadSettings() {
     enableESPNow = doc["enableESPNow"] | true;
     useESPNowSync = doc["useESPNowSync"] | true;
     espNowChannel = doc["espNowChannel"] | 1;
+
+    // Load presets
+    loadPresetsFromDoc(doc);
     Serial.printf("📡 Loaded ESPNow settings: Enabled=%s, Sync=%s, Channel=%d\n", 
                   enableESPNow ? "Yes" : "No", useESPNowSync ? "Yes" : "No", espNowChannel);
+
+    // Load presets
+    loadPresetsFromDoc(doc);
     
     // Load group settings
     groupCode = doc["groupCode"] | "";
@@ -6277,8 +7404,8 @@ bool loadSettings() {
         Serial.println("✅ NVS already has settings");
     }
     
-    // Update white LEDs with loaded settings
-    updateWhiteLEDs();
+    // Apply RGBW white channel setting with loaded settings
+    applyRgbwWhiteChannelMode();
     
     return true;
 }
@@ -6538,12 +7665,23 @@ void testFilesystem() {
 bool initESPNow() {
     if (!enableESPNow) {
         Serial.println("ESPNow: Disabled");
+        espNowState = 0;
+        espNowLastError = 0;
         return false;
     }
     
+    // Reset any previous ESP-NOW state
+    esp_now_deinit();
+    espNowPeerCount = 0;
+    espNowState = 0;
+    espNowLastError = 0;
+
     // Initialize ESPNow
-    if (esp_now_init() != ESP_OK) {
-        Serial.println("ESPNow: Failed to initialize");
+    esp_err_t initResult = esp_now_init();
+    if (initResult != ESP_OK) {
+        espNowLastError = initResult;
+        Serial.printf("ESPNow: Failed to initialize (%d:%s)\n",
+                      initResult, espNowErrorName(initResult));
         espNowState = 2; // Error
         return false;
     }
@@ -6555,25 +7693,56 @@ bool initESPNow() {
     // Add broadcast peer
     esp_now_peer_info_t peerInfo = {};
     memcpy(peerInfo.peer_addr, espNowBroadcastAddress, 6);
-    peerInfo.channel = espNowChannel;
+    peerInfo.channel = 0; // Use current channel
     peerInfo.encrypt = false;
+    peerInfo.ifidx = WIFI_IF_AP;
     
-    if (esp_now_add_peer(&peerInfo) != ESP_OK) {
-        Serial.println("ESPNow: Failed to add broadcast peer");
+    esp_err_t addResult = esp_now_add_peer(&peerInfo);
+    if (addResult != ESP_OK && addResult != ESP_ERR_ESPNOW_EXIST) {
+        espNowLastError = addResult;
+        Serial.printf("ESPNow: Failed to add broadcast peer (%d:%s)\n",
+                      addResult, espNowErrorName(addResult));
         espNowState = 2; // Error
         return false;
     }
     
     espNowState = 1; // On
+    espNowLastError = 0;
     Serial.println("ESPNow: Initialized successfully");
     return true;
+}
+
+void deinitESPNow() {
+    esp_now_deinit();
+    espNowState = 0;
+    espNowLastError = 0;
+    espNowPeerCount = 0;
+    Serial.println("ESPNow: Deinitialized");
+}
+
+bool ensureESPNowActive(const char* context) {
+    if (!enableESPNow) {
+        return false;
+    }
+    if (espNowState == 1) {
+        return true;
+    }
+    Serial.printf("ESPNow: Reinit requested (%s), state=%d, err=%d\n",
+                  context, espNowState, espNowLastError);
+    return initESPNow();
+}
+
+const char* espNowErrorName(esp_err_t error) {
+    const char* name = esp_err_to_name(error);
+    return name ? name : "UNKNOWN";
 }
 
 void sendESPNowData() {
     if (!enableESPNow || !useESPNowSync || espNowState != 1) {
         return;
     }
-    if (groupCode.length() > 0 && !isGroupMaster) {
+    // Only broadcast LED sync when leading a group
+    if (groupCode.length() == 0 || !isGroupMaster) {
         return;
     }
     
@@ -6583,7 +7752,33 @@ void sendESPNowData() {
     }
     
     uint32_t currentTime = millis();
-    if (currentTime - lastESPNowSend < ESPNOW_SEND_INTERVAL) {
+    bool hasChange = false;
+    if (!hasLastSyncState) {
+        hasChange = true;
+    } else {
+        hasChange |= lastSyncState.brightness != globalBrightness;
+        hasChange |= lastSyncState.headlightEffect != headlightEffect;
+        hasChange |= lastSyncState.taillightEffect != taillightEffect;
+        hasChange |= lastSyncState.effectSpeed != effectSpeed;
+        hasChange |= lastSyncState.headlightColor[0] != headlightColor.r;
+        hasChange |= lastSyncState.headlightColor[1] != headlightColor.g;
+        hasChange |= lastSyncState.headlightColor[2] != headlightColor.b;
+        hasChange |= lastSyncState.taillightColor[0] != taillightColor.r;
+        hasChange |= lastSyncState.taillightColor[1] != taillightColor.g;
+        hasChange |= lastSyncState.taillightColor[2] != taillightColor.b;
+        hasChange |= lastSyncState.headlightBackgroundEnabled != headlightBackgroundEnabled;
+        hasChange |= lastSyncState.taillightBackgroundEnabled != taillightBackgroundEnabled;
+        hasChange |= lastSyncState.headlightBackgroundColor[0] != headlightBackgroundColor.r;
+        hasChange |= lastSyncState.headlightBackgroundColor[1] != headlightBackgroundColor.g;
+        hasChange |= lastSyncState.headlightBackgroundColor[2] != headlightBackgroundColor.b;
+        hasChange |= lastSyncState.taillightBackgroundColor[0] != taillightBackgroundColor.r;
+        hasChange |= lastSyncState.taillightBackgroundColor[1] != taillightBackgroundColor.g;
+        hasChange |= lastSyncState.taillightBackgroundColor[2] != taillightBackgroundColor.b;
+        hasChange |= lastSyncState.preset != currentPreset;
+    }
+
+    uint32_t interval = hasChange ? ESPNOW_SYNC_MIN_INTERVAL : ESPNOW_SYNC_IDLE_INTERVAL;
+    if (currentTime - lastESPNowSend < interval) {
         return;
     }
     
@@ -6626,6 +7821,26 @@ void sendESPNowData() {
     esp_err_t result = esp_now_send(espNowBroadcastAddress, (uint8_t*)&data, sizeof(data));
     if (result == ESP_OK) {
         lastESPNowSend = currentTime;
+        lastSyncState.brightness = globalBrightness;
+        lastSyncState.headlightEffect = headlightEffect;
+        lastSyncState.taillightEffect = taillightEffect;
+        lastSyncState.effectSpeed = effectSpeed;
+        lastSyncState.headlightColor[0] = headlightColor.r;
+        lastSyncState.headlightColor[1] = headlightColor.g;
+        lastSyncState.headlightColor[2] = headlightColor.b;
+        lastSyncState.taillightColor[0] = taillightColor.r;
+        lastSyncState.taillightColor[1] = taillightColor.g;
+        lastSyncState.taillightColor[2] = taillightColor.b;
+        lastSyncState.headlightBackgroundEnabled = headlightBackgroundEnabled;
+        lastSyncState.taillightBackgroundEnabled = taillightBackgroundEnabled;
+        lastSyncState.headlightBackgroundColor[0] = headlightBackgroundColor.r;
+        lastSyncState.headlightBackgroundColor[1] = headlightBackgroundColor.g;
+        lastSyncState.headlightBackgroundColor[2] = headlightBackgroundColor.b;
+        lastSyncState.taillightBackgroundColor[0] = taillightBackgroundColor.r;
+        lastSyncState.taillightBackgroundColor[1] = taillightBackgroundColor.g;
+        lastSyncState.taillightBackgroundColor[2] = taillightBackgroundColor.b;
+        lastSyncState.preset = currentPreset;
+        hasLastSyncState = true;
     } else {
         //Serial.printf("ESPNow: Send failed with error %d\n", result);
     }
@@ -6654,8 +7869,9 @@ void addESPNowPeer(uint8_t* macAddress) {
     
     esp_now_peer_info_t peerInfo = {};
     memcpy(peerInfo.peer_addr, macAddress, 6);
-    peerInfo.channel = espNowChannel;
+    peerInfo.channel = 0; // Use current channel
     peerInfo.encrypt = false;
+    peerInfo.ifidx = WIFI_IF_AP;
     
     if (esp_now_add_peer(&peerInfo) == ESP_OK) {
         espNowPeerCount++;
@@ -6667,13 +7883,13 @@ void addESPNowPeer(uint8_t* macAddress) {
 
 // Group Management Functions
 void handleGroupMessage(const uint8_t* mac_addr, const uint8_t* data, int len) {
-    if (len < sizeof(ESPNowGroupData)) return;
+    if (len != sizeof(ESPNowGroupData)) return;
     
     ESPNowGroupData* groupData = (ESPNowGroupData*)data;
     
     // Verify checksum
     uint8_t calculatedChecksum = 0;
-    for (int i = 0; i < len - 1; i++) {
+    for (int i = 0; i < (int)sizeof(ESPNowGroupData) - 1; i++) {
         calculatedChecksum ^= data[i];
     }
     if (calculatedChecksum != groupData->checksum) {
@@ -6681,6 +7897,20 @@ void handleGroupMessage(const uint8_t* mac_addr, const uint8_t* data, int len) {
         return;
     }
     
+    // Auto-join discovery: accept first heartbeat when scanning
+    if (groupCode.length() == 0 && autoJoinOnHeartbeat && groupData->messageType == 0) {
+        groupCode = String(groupData->groupCode);
+        isGroupMaster = false;
+        hasGroupMaster = false;
+        autoJoinOnHeartbeat = false;
+        joinInProgress = true;
+        memset(groupMasterMac, 0, sizeof(groupMasterMac));
+        groupMemberCount = 0;
+        sendJoinRequest();
+        Serial.printf("Group: Discovered and joining code %s\n", groupCode.c_str());
+        return;
+    }
+
     // Check if group code matches
     if (strcmp(groupData->groupCode, groupCode.c_str()) != 0) {
         return; // Not for our group
@@ -6695,6 +7925,7 @@ void handleGroupMessage(const uint8_t* mac_addr, const uint8_t* data, int len) {
                         hasGroupMaster = true;
                     }
                     masterHeartbeat = millis();
+                    joinInProgress = false;
                     Serial.printf("Group: Received heartbeat from %s\n", groupData->deviceName);
                 }
             }
@@ -6705,10 +7936,11 @@ void handleGroupMessage(const uint8_t* mac_addr, const uint8_t* data, int len) {
                 Serial.printf("Group: Join request from %s (%02x:%02x:%02x:%02x:%02x:%02x)\n", 
                              groupData->deviceName, mac_addr[0], mac_addr[1], mac_addr[2], 
                              mac_addr[3], mac_addr[4], mac_addr[5]);
+                addESPNowPeer((uint8_t*)mac_addr);
                 addGroupMember(mac_addr, groupData->deviceName);
                 sendJoinResponse(mac_addr, true);
-            } else {
-                sendJoinResponse(mac_addr, false);
+            } else if (isGroupMaster && !allowGroupJoin) {
+                Serial.println("Group: Join request ignored (joining disabled)");
             }
             break;
             
@@ -6720,6 +7952,8 @@ void handleGroupMessage(const uint8_t* mac_addr, const uint8_t* data, int len) {
                     memcpy(groupMasterMac, mac_addr, 6);
                     hasGroupMaster = true;
                 }
+                masterHeartbeat = millis();
+                joinInProgress = false;
                 addGroupMember(mac_addr, groupData->deviceName);
             }
             break;
@@ -6748,6 +7982,9 @@ bool isGroupMember(const uint8_t* mac_addr) {
 
 void sendGroupHeartbeat() {
     if (millis() - lastGroupHeartbeat < HEARTBEAT_INTERVAL) return;
+    if (!ensureESPNowActive("heartbeat")) {
+        return;
+    }
     
     ESPNowGroupData data;
     data.magic = 'G';
@@ -6772,11 +8009,25 @@ void sendGroupHeartbeat() {
         data.checksum ^= dataPtr[i];
     }
     
-    esp_now_send(espNowBroadcastAddress, (uint8_t*)&data, sizeof(data));
+    esp_err_t result = esp_now_send(espNowBroadcastAddress, (uint8_t*)&data, sizeof(data));
+    if (result != ESP_OK) {
+        espNowLastError = result;
+        if (result == ESP_ERR_ESPNOW_NOT_INIT || result == ESP_ERR_INVALID_STATE) {
+            espNowState = 2;
+        }
+        Serial.printf("Group: Heartbeat send failed (%d:%s)\n",
+                      result, espNowErrorName(result));
+        return;
+    }
     lastGroupHeartbeat = millis();
 }
 
 void sendJoinRequest() {
+    if (groupCode.length() != 6) return;
+    if (!ensureESPNowActive("join")) {
+        Serial.println("Group: Join request skipped (ESPNow not active)");
+        return;
+    }
     ESPNowGroupData data;
     data.magic = 'G';
     data.messageType = 1; // Join request
@@ -6800,7 +8051,17 @@ void sendJoinRequest() {
         data.checksum ^= dataPtr[i];
     }
     
-    esp_now_send(espNowBroadcastAddress, (uint8_t*)&data, sizeof(data));
+    esp_err_t result = esp_now_send(espNowBroadcastAddress, (uint8_t*)&data, sizeof(data));
+    if (result != ESP_OK) {
+        espNowLastError = result;
+        if (result == ESP_ERR_ESPNOW_NOT_INIT || result == ESP_ERR_INVALID_STATE) {
+            espNowState = 2;
+        }
+        Serial.printf("Group: Join request send failed (%d:%s)\n",
+                      result, espNowErrorName(result));
+        return;
+    }
+    lastJoinRequest = millis();
     Serial.println("Group: Sent join request");
 }
 
@@ -6837,6 +8098,16 @@ void sendJoinResponse(const uint8_t* mac_addr, bool accept) {
 void addGroupMember(const uint8_t* mac_addr, const char* deviceName) {
     if (groupMemberCount >= 10) return;
     
+    for (int i = 0; i < groupMemberCount; i++) {
+        if (memcmp(groupMembers[i].mac, mac_addr, 6) == 0) {
+            strncpy(groupMembers[i].deviceName, deviceName, 20);
+            groupMembers[i].deviceName[20] = '\0';
+            groupMembers[i].lastSeen = millis();
+            groupMembers[i].isAuthenticated = true;
+            return;
+        }
+    }
+
     memcpy(groupMembers[groupMemberCount].mac, mac_addr, 6);
     strncpy(groupMembers[groupMemberCount].deviceName, deviceName, 20);
     groupMembers[groupMemberCount].deviceName[20] = '\0';
@@ -6867,6 +8138,8 @@ void removeGroupMember(const uint8_t* mac_addr) {
 
 void checkMasterTimeout() {
     if (isGroupMaster) return; // We are the master
+
+    if (joinInProgress) return; // Avoid self-election while joining
     
     if (millis() - masterHeartbeat > MASTER_TIMEOUT) {
         Serial.println("Group: Master timeout - becoming master");

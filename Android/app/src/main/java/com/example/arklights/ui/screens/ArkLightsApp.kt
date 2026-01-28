@@ -11,6 +11,8 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.arklights.api.ArkLightsApiService
 import com.example.arklights.bluetooth.BluetoothService
 import com.example.arklights.data.ConnectionState
+import com.example.arklights.data.DeviceStore
+import com.example.arklights.ui.components.BrandingHeader
 import com.example.arklights.viewmodel.ArkLightsViewModel
 import kotlinx.coroutines.launch
 
@@ -18,9 +20,10 @@ import kotlinx.coroutines.launch
 fun ArkLightsApp(
     bluetoothService: BluetoothService,
     apiService: ArkLightsApiService,
+    deviceStore: DeviceStore,
     modifier: Modifier = Modifier,
     viewModel: ArkLightsViewModel = viewModel {
-        ArkLightsViewModel(bluetoothService, apiService)
+        ArkLightsViewModel(bluetoothService, apiService, deviceStore)
     }
 ) {
     val connectionState by viewModel.connectionState.collectAsState()
@@ -34,6 +37,10 @@ fun ArkLightsApp(
             .padding(16.dp),
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
+        BrandingHeader()
+        
+        Spacer(modifier = Modifier.height(8.dp))
+
         // Header
         Text(
             text = "ArkLights PEV Control",
