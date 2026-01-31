@@ -12,7 +12,6 @@ import com.example.arklights.api.ArkLightsApiService
 import com.example.arklights.bluetooth.BluetoothService
 import com.example.arklights.data.ConnectionState
 import com.example.arklights.data.DeviceStore
-import com.example.arklights.ui.components.BrandingHeader
 import com.example.arklights.viewmodel.ArkLightsViewModel
 import kotlinx.coroutines.launch
 
@@ -34,30 +33,30 @@ fun ArkLightsApp(
     Column(
         modifier = modifier
             .fillMaxSize()
-            .padding(16.dp),
+            .padding(horizontal = 16.dp, vertical = 12.dp),
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
-        BrandingHeader()
+        // Compact Header Row
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                text = "ArkLights",
+                style = MaterialTheme.typography.titleLarge,
+                fontWeight = FontWeight.Bold,
+                color = MaterialTheme.colorScheme.primary
+            )
+            
+            // Connection Status - inline
+            ConnectionStatusCard(
+                connectionState = connectionState,
+                deviceStatus = deviceStatus
+            )
+        }
         
-        Spacer(modifier = Modifier.height(8.dp))
-
-        // Header
-        Text(
-            text = "ArkLights PEV Control",
-            style = MaterialTheme.typography.headlineMedium,
-            fontWeight = FontWeight.Bold,
-            color = MaterialTheme.colorScheme.primary
-        )
-        
-        Spacer(modifier = Modifier.height(8.dp))
-        
-        // Connection Status
-        ConnectionStatusCard(
-            connectionState = connectionState,
-            deviceStatus = deviceStatus
-        )
-        
-        Spacer(modifier = Modifier.height(16.dp))
+        Spacer(modifier = Modifier.height(12.dp))
         
         when (connectionState) {
             ConnectionState.DISCONNECTED -> {
@@ -92,56 +91,38 @@ fun ConnectionStatusCard(
     connectionState: ConnectionState,
     deviceStatus: com.example.arklights.data.LEDStatus?
 ) {
-    Card(
-        modifier = Modifier.fillMaxWidth(),
-        colors = CardDefaults.cardColors(
-            containerColor = when (connectionState) {
-                ConnectionState.CONNECTED -> MaterialTheme.colorScheme.primaryContainer
-                ConnectionState.CONNECTING -> MaterialTheme.colorScheme.secondaryContainer
-                ConnectionState.ERROR -> MaterialTheme.colorScheme.errorContainer
-                else -> MaterialTheme.colorScheme.surfaceVariant
-            }
-        )
+    val statusColor = when (connectionState) {
+        ConnectionState.CONNECTED -> MaterialTheme.colorScheme.primary
+        ConnectionState.CONNECTING -> MaterialTheme.colorScheme.secondary
+        ConnectionState.ERROR -> MaterialTheme.colorScheme.error
+        else -> MaterialTheme.colorScheme.outline
+    }
+    
+    val statusText = when (connectionState) {
+        ConnectionState.CONNECTED -> "Connected"
+        ConnectionState.CONNECTING -> "Connecting..."
+        ConnectionState.ERROR -> "Error"
+        else -> "Disconnected"
+    }
+    
+    // Compact inline status indicator
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(6.dp)
     ) {
-        Column(
-            modifier = Modifier.padding(16.dp)
-        ) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Text(
-                    text = "Status: ${connectionState.name}",
-                    style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.Bold
-                )
-                
-                if (connectionState == ConnectionState.CONNECTED) {
-                    Text(
-                        text = "v8.0 OTA",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
-            }
-            
-            if (deviceStatus != null && connectionState == ConnectionState.CONNECTED) {
-                Spacer(modifier = Modifier.height(8.dp))
-                
-                Text(
-                    text = "Build Date: ${deviceStatus.build_date}",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-                
-                Text(
-                    text = "WiFi AP: ${deviceStatus.apName}",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            }
-        }
+        // Status dot
+        Surface(
+            modifier = Modifier.size(8.dp),
+            shape = androidx.compose.foundation.shape.CircleShape,
+            color = statusColor
+        ) {}
+        
+        Text(
+            text = statusText,
+            style = MaterialTheme.typography.bodySmall,
+            color = statusColor,
+            fontWeight = FontWeight.Medium
+        )
     }
 }
 

@@ -638,6 +638,25 @@ function applyWiFiConfig() {
     });
 }
 
+function restoreDefaults() {
+    if (!confirm('Restore all settings to stock? AP/BLE name will be unique. Device will restart and disconnect.')) {
+        return;
+    }
+    fetch('/api', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ restoreDefaults: true })
+    }).then(response => response.json())
+    .then(data => {
+        if (data.success) {
+            alert('Defaults restored! Device is restarting...');
+            setTimeout(() => {
+                window.location.reload();
+            }, 3000);
+        }
+    });
+}
+
 function setHeadlightColor(color) {
     const hex = color.replace('#', '');
     fetch('/api', {

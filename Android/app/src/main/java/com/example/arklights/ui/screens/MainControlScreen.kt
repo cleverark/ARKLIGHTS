@@ -1,10 +1,19 @@
 package com.example.arklights.ui.screens
 
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.KeyboardArrowUp
+import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -21,28 +30,25 @@ fun MainControlScreen(
     Column(
         modifier = Modifier.fillMaxSize()
     ) {
-        // Navigation Tabs
+        // Navigation Tabs - cleaner styling
         TabRow(
             selectedTabIndex = when (currentPage) {
                 "main" -> 0
-                "group" -> 1
-                "settings" -> 2
+                "settings" -> 1
                 else -> 0
-            }
+            },
+            containerColor = MaterialTheme.colorScheme.surface,
+            contentColor = MaterialTheme.colorScheme.primary
         ) {
             Tab(
                 selected = currentPage == "main",
                 onClick = { onPageChange("main") },
-                text = { Text("Main Controls") }
-            )
-            Tab(
-                selected = currentPage == "group",
-                onClick = { onPageChange("group") },
-                text = { Text("Group Sync") }
+                text = { Text("Lights") }
             )
             Tab(
                 selected = currentPage == "settings",
                 onClick = { onPageChange("settings") },
+                icon = { Icon(Icons.Filled.Settings, contentDescription = null, modifier = Modifier.size(18.dp)) },
                 text = { Text("Settings") }
             )
         }
@@ -55,7 +61,6 @@ fun MainControlScreen(
         ) {
             when (currentPage) {
                 "main" -> MainControlsPage(viewModel = viewModel)
-                "group" -> GroupSyncPage(viewModel = viewModel)
                 "settings" -> SettingsPage(viewModel = viewModel)
             }
         }
@@ -67,42 +72,87 @@ fun MainControlsPage(
     viewModel: ArkLightsViewModel
 ) {
     val deviceStatus by viewModel.deviceStatus.collectAsState()
+    val isLoading by viewModel.isLoading.collectAsState()
     val scope = rememberCoroutineScope()
+    var advancedExpanded by remember { mutableStateOf(false) }
     
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .padding(16.dp),
+            .padding(horizontal = 16.dp, vertical = 12.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
-        // Presets Section
-        PresetsSection(
-            deviceStatus = deviceStatus,
+        // Sync Status Row
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            // Show last sync info
+            if (deviceStatus != null) {
+                Text(
+                    text = "Device synced",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.primary
+                )
+            } else {
+                Text(
+                    text = "Waiting for device...",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            
+            // Manual refresh button
+            IconButton(
+                onClick = {
+                    scope.launch {
+                        viewModel.refreshStatus()
+                    }
+                },
+                enabled = !isLoading
+            ) {
+                if (isLoading) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(20.dp),
+                        strokeWidth = 2.dp
+                    )
+                } else {
+                    Icon(
+                        Icons.Default.Refresh,
+                        contentDescription = "Refresh",
+                        tint = MaterialTheme.colorScheme.primary
+                    )
+                }
+            }
+        }
+        
+        // Quick Presets - Prominent at the top
+        QuickPresetsSection(
+            currentPreset = deviceStatus?.preset,
             onPresetSelected = { preset ->
                 scope.launch {
                     viewModel.setPreset(preset)
                 }
-            },
-            onSavePreset = { name ->
+            }
+        )
+        
+        // Global Brightness - Always visible since it's commonly used
+        BrightnessSliderCompact(
+            brightness = deviceStatus?.brightness ?: 128,
+            onBrightnessChange = { brightness ->
                 scope.launch {
-                    viewModel.savePreset(name)
-                }
-            },
-            onRenamePreset = { index, name ->
-                scope.launch {
-                    viewModel.updatePreset(index, name)
-                }
-            },
-            onDeletePreset = { index ->
-                scope.launch {
-                    viewModel.deletePreset(index)
+                    viewModel.setBrightness(brightness)
                 }
             }
         )
         
-        // Headlight Section
-        HeadlightSection(
-            deviceStatus = deviceStatus,
+        // Headlight Card - Clean compact design
+        LightControlCard(
+            title = "Headlight",
+            currentColor = deviceStatus?.headlightColor,
+            currentEffect = deviceStatus?.headlightEffect,
+            defaultColors = listOf("#FFFFFF", "#FF0000", "#00FF00", "#0000FF", "#FFFF00", "#FF00FF", "#00FFFF"),
             onColorChange = { color ->
                 scope.launch {
                     viewModel.setHeadlightColor(color)
@@ -112,27 +162,15 @@ fun MainControlsPage(
                 scope.launch {
                     viewModel.setHeadlightEffect(effect)
                 }
-            },
-            onBackgroundEnabledChange = { enabled ->
-                scope.launch {
-                    viewModel.setHeadlightBackgroundEnabled(enabled)
-                }
-            },
-            onBackgroundColorChange = { color ->
-                scope.launch {
-                    viewModel.setHeadlightBackgroundColor(color)
-                }
-            },
-            onHeadlightModeChange = { mode ->
-                scope.launch {
-                    viewModel.setHeadlightMode(mode)
-                }
             }
         )
         
-        // Taillight Section
-        TaillightSection(
-            deviceStatus = deviceStatus,
+        // Taillight Card - Clean compact design
+        LightControlCard(
+            title = "Taillight",
+            currentColor = deviceStatus?.taillightColor,
+            currentEffect = deviceStatus?.taillightEffect,
+            defaultColors = listOf("#FF0000", "#FFFFFF", "#FF6600", "#FFFF00", "#FF00FF", "#00FFFF", "#0000FF"),
             onColorChange = { color ->
                 scope.launch {
                     viewModel.setTaillightColor(color)
@@ -142,42 +180,19 @@ fun MainControlsPage(
                 scope.launch {
                     viewModel.setTaillightEffect(effect)
                 }
-            },
-            onBackgroundEnabledChange = { enabled ->
-                scope.launch {
-                    viewModel.setTaillightBackgroundEnabled(enabled)
-                }
-            },
-            onBackgroundColorChange = { color ->
-                scope.launch {
-                    viewModel.setTaillightBackgroundColor(color)
-                }
             }
         )
         
-        // Brightness Section
-        BrightnessSection(
-            deviceStatus = deviceStatus,
-            onBrightnessChange = { brightness ->
-                scope.launch {
-                    viewModel.setBrightness(brightness)
-                }
-            }
-        )
-        
-        // Effect Speed Section
-        EffectSpeedSection(
+        // Advanced LED Settings - Collapsible (everything else goes here)
+        AdvancedSettingsCard(
+            expanded = advancedExpanded,
+            onExpandedChange = { advancedExpanded = it },
             deviceStatus = deviceStatus,
             onSpeedChange = { speed ->
                 scope.launch {
                     viewModel.setEffectSpeed(speed)
                 }
-            }
-        )
-        
-        // Motion Control Section
-        MotionControlSection(
-            deviceStatus = deviceStatus,
+            },
             onMotionEnabled = { enabled ->
                 scope.launch {
                     viewModel.setMotionEnabled(enabled)
@@ -202,142 +217,6 @@ fun MainControlsPage(
                 scope.launch {
                     viewModel.setMotionSensitivity(sensitivity)
                 }
-            },
-            onDirectionBasedLighting = { enabled ->
-                scope.launch {
-                    viewModel.setDirectionBasedLighting(enabled)
-                }
-            },
-            onForwardAccelThresholdChange = { threshold ->
-                scope.launch {
-                    viewModel.setForwardAccelThreshold(threshold)
-                }
-            },
-            onBrakingEnabled = { enabled ->
-                scope.launch {
-                    viewModel.setBrakingEnabled(enabled)
-                }
-            },
-            onBrakingEffectChange = { effect ->
-                scope.launch {
-                    viewModel.setBrakingEffect(effect)
-                }
-            },
-            onBrakingThresholdChange = { threshold ->
-                scope.launch {
-                    viewModel.setBrakingThreshold(threshold)
-                }
-            },
-            onBrakingBrightnessChange = { brightness ->
-                scope.launch {
-                    viewModel.setBrakingBrightness(brightness)
-                }
-            },
-            onRgbwWhiteModeChange = { mode ->
-                scope.launch {
-                    viewModel.setRgbwWhiteMode(mode)
-                }
-            },
-            onManualBlinker = { direction ->
-                scope.launch {
-                    viewModel.setManualBlinker(direction)
-                }
-            },
-            onManualBrake = { enabled ->
-                scope.launch {
-                    viewModel.setManualBrake(enabled)
-                }
-            }
-        )
-        
-        // Status Section
-        StatusSection(deviceStatus = deviceStatus)
-        
-        // Disconnect Button
-        Button(
-            onClick = {
-                scope.launch {
-                    viewModel.disconnect()
-                }
-            },
-            colors = ButtonDefaults.buttonColors(
-                containerColor = MaterialTheme.colorScheme.error
-            ),
-            modifier = Modifier.fillMaxWidth()
-        ) {
-            Text("Disconnect")
-        }
-    }
-}
-
-@Composable
-fun GroupSyncPage(
-    viewModel: ArkLightsViewModel
-) {
-    val deviceStatus by viewModel.deviceStatus.collectAsState()
-    val scope = rememberCoroutineScope()
-
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .padding(16.dp),
-        verticalArrangement = Arrangement.spacedBy(16.dp)
-    ) {
-        ESPNowConfigurationSection(
-            deviceStatus = deviceStatus,
-            onESPNowEnabled = { enabled ->
-                scope.launch {
-                    viewModel.setESPNowEnabled(enabled)
-                }
-            },
-            onESPNowSync = { enabled ->
-                scope.launch {
-                    viewModel.setESPNowSync(enabled)
-                }
-            },
-            onESPNowChannelChange = { channel ->
-                scope.launch {
-                    viewModel.setESPNowChannel(channel)
-                }
-            }
-        )
-
-        GroupManagementSection(
-            deviceStatus = deviceStatus,
-            onDeviceNameChange = { name ->
-                scope.launch {
-                    viewModel.setDeviceName(name)
-                }
-            },
-            onCreateGroup = { code ->
-                scope.launch {
-                    viewModel.createGroup(code)
-                }
-            },
-            onJoinGroup = { code ->
-                scope.launch {
-                    viewModel.joinGroup(code)
-                }
-            },
-            onScanJoinGroup = {
-                scope.launch {
-                    viewModel.scanJoinGroup()
-                }
-            },
-            onLeaveGroup = {
-                scope.launch {
-                    viewModel.leaveGroup()
-                }
-            },
-            onAllowGroupJoin = {
-                scope.launch {
-                    viewModel.allowGroupJoin()
-                }
-            },
-            onBlockGroupJoin = {
-                scope.launch {
-                    viewModel.blockGroupJoin()
-                }
             }
         )
     }
@@ -356,10 +235,14 @@ fun SettingsPage(
             .padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
-        Text(
-            text = "Settings",
-            style = MaterialTheme.typography.headlineMedium,
-            fontWeight = FontWeight.Bold
+        // Connection Status Header
+        ConnectionStatusCard(
+            deviceStatus = deviceStatus,
+            onDisconnect = {
+                scope.launch {
+                    viewModel.disconnect()
+                }
+            }
         )
         
         // Calibration Section
@@ -491,6 +374,61 @@ fun SettingsPage(
             onApplyWiFiConfig = { name, password ->
                 scope.launch {
                     viewModel.applyWiFiConfig(name, password)
+                }
+            }
+        )
+        
+        // ESPNow Configuration Section
+        ESPNowConfigurationSection(
+            deviceStatus = deviceStatus,
+            onESPNowEnabled = { enabled ->
+                scope.launch {
+                    viewModel.setESPNowEnabled(enabled)
+                }
+            },
+            onESPNowSync = { enabled ->
+                scope.launch {
+                    viewModel.setESPNowSync(enabled)
+                }
+            },
+            onESPNowChannelChange = { channel ->
+                scope.launch {
+                    viewModel.setESPNowChannel(channel)
+                }
+            }
+        )
+        
+        // Group Management Section
+        GroupManagementSection(
+            deviceStatus = deviceStatus,
+            onDeviceNameChange = { name ->
+                scope.launch {
+                    viewModel.setDeviceName(name)
+                }
+            },
+            onCreateGroup = { code ->
+                scope.launch {
+                    viewModel.createGroup(code)
+                }
+            },
+            onJoinGroup = { code ->
+                scope.launch {
+                    viewModel.joinGroup(code)
+                }
+            },
+            onLeaveGroup = {
+                scope.launch {
+                    viewModel.leaveGroup()
+                }
+            },
+            onAllowGroupJoin = {
+                scope.launch {
+                    viewModel.allowGroupJoin()
+                }
+            },
+            onBlockGroupJoin = {
+                scope.launch {
+                    viewModel.blockGroupJoin()
                 }
             }
         )

@@ -7,6 +7,7 @@ import com.example.arklights.bluetooth.BluetoothService
 import com.example.arklights.data.*
 import com.example.arklights.data.ConnectionState
 import kotlinx.coroutines.flow.*
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import android.bluetooth.BluetoothDevice
 
@@ -34,6 +35,8 @@ class ArkLightsViewModel(
     private val _deviceStatus = MutableStateFlow<LEDStatus?>(null)
     val deviceStatus: StateFlow<LEDStatus?> = _deviceStatus.asStateFlow()
     private var cachedPresets: List<PresetInfo> = emptyList()
+    private var calibrationRefreshJob: Job? = null
+    private var calibrationForcedUntilMs: Long = 0
     
     // UI state
     private val _currentPage = MutableStateFlow("main")
@@ -116,11 +119,45 @@ class ArkLightsViewModel(
             } else {
                 resolvedPresets.size
             }
-            _deviceStatus.value = status.copy(
+            val now = System.currentTimeMillis()
+            val shouldForceCalibration = now < calibrationForcedUntilMs && !status.calibration_mode
+            val forcedStatus = if (shouldForceCalibration) {
+                status.copy(
+                    calibration_mode = true,
+                    calibration_step = 0,
+                    calibration_complete = false
+                )
+            } else {
+                status
+            }
+
+            _deviceStatus.value = forcedStatus.copy(
                 presets = resolvedPresets,
                 presetCount = resolvedPresetCount
             )
+            if (forcedStatus.calibration_mode) {
+                startCalibrationRefreshIfNeeded()
+            } else {
+                stopCalibrationRefresh()
+            }
         }
+    }
+
+    private fun startCalibrationRefreshIfNeeded() {
+        if (calibrationRefreshJob?.isActive == true) return
+        calibrationRefreshJob = viewModelScope.launch {
+            while (true) {
+                refreshStatus()
+                kotlinx.coroutines.delay(2000)
+                val status = _deviceStatus.value
+                if (status == null || !status.calibration_mode) break
+            }
+        }
+    }
+
+    private fun stopCalibrationRefresh() {
+        calibrationRefreshJob?.cancel()
+        calibrationRefreshJob = null
     }
     
     private fun startStatusUpdates() {
@@ -336,16 +373,28 @@ class ArkLightsViewModel(
     // Calibration Methods
     suspend fun startCalibration() {
         apiService.startCalibration()
+        val current = _deviceStatus.value
+        if (current != null) {
+            _deviceStatus.value = current.copy(
+                calibration_mode = true,
+                calibration_step = 0,
+                calibration_complete = false
+            )
+        }
+        calibrationForcedUntilMs = System.currentTimeMillis() + 6000
+        startCalibrationRefreshIfNeeded()
         refreshStatus()
     }
     
     suspend fun nextCalibrationStep() {
         apiService.nextCalibrationStep()
+        startCalibrationRefreshIfNeeded()
         refreshStatus()
     }
     
     suspend fun resetCalibration() {
         apiService.resetCalibration()
+        stopCalibrationRefresh()
         refreshStatus()
     }
     
@@ -387,6 +436,11 @@ class ArkLightsViewModel(
     suspend fun applyWiFiConfig(name: String, password: String) {
         apiService.applyWiFiConfig(name, password)
         refreshStatus()
+    }
+
+    suspend fun restoreDefaults() {
+        apiService.restoreDefaults()
+        // Device will restart and disconnect - no need to refresh
     }
     
     // ESPNow Configuration

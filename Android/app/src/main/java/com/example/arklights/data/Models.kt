@@ -185,6 +185,7 @@ data class LEDControlRequest(
     val apName: String? = null,
     val apPassword: String? = null,
     val restart: Boolean? = null,
+    val restoreDefaults: Boolean? = null,
     
     // ESPNow Configuration
     val enableESPNow: Boolean? = null,

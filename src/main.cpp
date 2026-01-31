@@ -55,7 +55,7 @@ struct CRGBW {
 // This is a clean, focused implementation for PEV devices
 
 // Debug flag - set to false to disable all debug Serial output for release builds
-#define DEBUG_ENABLED false
+#define DEBUG_ENABLED true
 
 // Configuration for XIAO ESP32S3
 #define HEADLIGHT_PIN 2
@@ -414,6 +414,9 @@ uint16_t startupDuration = 3000; // Duration in milliseconds
 MPU6050 mpu;
 
 // NVS for persistent settings storage (survives OTA filesystem updates)
+// ESP32 NVS has a 508-byte limit per key; we chunk the settings JSON into NVS_CHUNK_SIZE pieces.
+constexpr size_t NVS_CHUNK_SIZE = 500;
+constexpr char NVS_KEY_CHUNK_COUNT[] = "sc";  // 1 byte: number of chunks
 Preferences nvs;
 const char* NVS_NAMESPACE = "arklights";
 bool nvsMigrationPending = false; // Track if NVS migration needs to happen
@@ -892,10 +895,13 @@ void serveEmbeddedUI();
 void handleAPI();
 void handleStatus();
 String getStatusJSON();
+void buildStatusDocument(DynamicJsonDocument& doc);
 void handleLEDConfig();
 void handleLEDTest();
 void handleGetSettings();
 void sendJSONResponse(DynamicJsonDocument& doc);
+void restoreDefaultsToStock();
+String getDefaultApName();
 
 void setup() {
     Serial.begin(115200);
@@ -916,7 +922,13 @@ void setup() {
     initFilesystem();
     
     // Load saved settings
-    loadSettings();
+    if (!loadSettings()) {
+        // No saved settings - use unique default AP/BLE name from MAC
+        apName = getDefaultApName();
+        bluetoothDeviceName = apName;
+        apPassword = "float420";
+        Serial.printf("📡 First boot: using unique AP/BLE name %s\n", apName.c_str());
+    }
     if (presetCount == 0) {
         initDefaultPresets();
     }
@@ -2450,6 +2462,95 @@ void initDefaultPresets() {
     addDefault("Stealth", 50, 64, FX_SOLID, FX_SOLID, CRGB(50, 50, 50), CRGB(20, 0, 0));
 }
 
+void restoreDefaultsToStock() {
+    Serial.println("🔄 Restoring all settings to stock defaults...");
+
+    // Lights
+    currentPreset = PRESET_STANDARD;
+    globalBrightness = DEFAULT_BRIGHTNESS;
+    effectSpeed = 64;
+    headlightColor = CRGB::White;
+    taillightColor = CRGB::Red;
+    headlightEffect = FX_SOLID;
+    taillightEffect = FX_SOLID;
+    headlightBackgroundEnabled = false;
+    taillightBackgroundEnabled = false;
+    headlightBackgroundColor = CRGB::Black;
+    taillightBackgroundColor = CRGB::Black;
+    headlightMode = 0;
+
+    // Startup
+    startupSequence = STARTUP_POWER_ON;
+    startupEnabled = true;
+    startupDuration = 3000;
+
+    // Motion
+    motionEnabled = true;
+    blinkerEnabled = true;
+    parkModeEnabled = true;
+    impactDetectionEnabled = true;
+    motionSensitivity = 1.0f;
+    blinkerDelay = 300;
+    blinkerTimeout = 2000;
+    parkAccelNoiseThreshold = 0.05f;
+    parkGyroNoiseThreshold = 2.5f;
+    parkStationaryTime = 2000;
+    directionBasedLighting = false;
+    forwardAccelThreshold = 0.3f;
+    brakingEnabled = false;
+    brakingThreshold = -0.5f;
+    brakingEffect = 0;
+    brakingBrightness = 255;
+
+    // Park mode
+    parkEffect = FX_BREATH;
+    parkEffectSpeed = 64;
+    parkHeadlightColor = CRGB::Blue;
+    parkTaillightColor = CRGB::Blue;
+    parkBrightness = 128;
+
+    // RGBW
+    whiteLEDsEnabled = false;
+    rgbwWhiteMode = 0;
+
+    // LED config
+    headlightLedCount = 11;
+    taillightLedCount = 11;
+    headlightLedType = 0;
+    taillightLedType = 0;
+    headlightColorOrder = 1;
+    taillightColorOrder = 1;
+
+    // WiFi - unique name from MAC, password stays default
+    apName = getDefaultApName();
+    bluetoothDeviceName = apName;
+    apPassword = "float420";
+
+    // ESPNow
+    enableESPNow = true;
+    useESPNowSync = true;
+    espNowChannel = 1;
+
+    // Group
+    groupCode = "";
+    isGroupMaster = false;
+    allowGroupJoin = false;
+    deviceName = "";
+
+    // Calibration
+    resetCalibration();
+
+    // Presets
+    initDefaultPresets();
+
+    // Re-initialize LEDs with new counts
+    initializeLEDs();
+    applyRgbwWhiteChannelMode();
+
+    saveSettings();
+    Serial.printf("✅ Stock defaults restored. AP/BLE: %s (restart required)\n", apName.c_str());
+}
+
 bool addPreset(const String& name) {
     if (presetCount >= MAX_PRESETS) return false;
     PresetConfig& preset = presets[presetCount];
@@ -2832,12 +2933,9 @@ MotionData getMotionData() {
 }
 
 void updateMotionControl() {
-    if (!motionEnabled) return;
-    
-    MotionData data = getMotionData();
-    
     // Handle calibration mode - only show debug info, don't auto-capture
     if (calibrationMode) {
+        MotionData data = getMotionData();
         // Show current motion data for debugging during calibration
         static unsigned long lastCalibrationDebug = 0;
         if (millis() - lastCalibrationDebug >= 1000) { // Update every second
@@ -2847,6 +2945,10 @@ void updateMotionControl() {
         }
         return;
     }
+    
+    if (!motionEnabled) return;
+    
+    MotionData data = getMotionData();
     
     // Process motion features
     if (directionBasedLighting) {
@@ -5679,16 +5781,40 @@ bool applyApiJson(DynamicJsonDocument& doc, bool allowRestart, bool& shouldResta
         saveSettings(); // Auto-save
     }
 
+    // Calibration API (required for BLE/Android app)
+    if (doc.containsKey("startCalibration") && doc["startCalibration"]) {
+        startCalibration();
+        Serial.println("BLE: Starting motion calibration...");
+    }
+    if (doc.containsKey("resetCalibration") && doc["resetCalibration"]) {
+        resetCalibration();
+        Serial.println("BLE: Motion calibration reset");
+    }
+    if (doc.containsKey("nextCalibrationStep") && doc["nextCalibrationStep"]) {
+        if (calibrationMode) {
+            MotionData data = getMotionData();
+            captureCalibrationStep(data);
+        }
+    }
+
     // WiFi settings
     if (doc.containsKey("apName")) {
         apName = doc["apName"].as<String>();
-        Serial.printf("🔧 WiFi AP Name updated to: %s\n", apName.c_str());
+        bluetoothDeviceName = apName;  // Keep BLE name in sync with AP name
+        Serial.printf("🔧 WiFi AP Name updated to: %s (BLE will use on restart)\n", apName.c_str());
         saveSettings(); // Auto-save
     }
     if (doc.containsKey("apPassword")) {
         apPassword = doc["apPassword"].as<String>();
         Serial.printf("🔧 WiFi AP Password updated to: %s\n", apPassword.c_str());
         saveSettings(); // Auto-save
+    }
+
+    if (doc.containsKey("restoreDefaults") && doc["restoreDefaults"]) {
+        restoreDefaultsToStock();
+        delay(500);  // Allow response to be sent
+        ESP.restart();
+        return true;
     }
 
     if (doc.containsKey("restart") && doc["restart"]) {
@@ -6195,13 +6321,21 @@ void handleAPI() {
         }
         if (doc.containsKey("apName")) {
             apName = doc["apName"].as<String>();
-            Serial.printf("🔧 WiFi AP Name updated to: %s\n", apName.c_str());
+            bluetoothDeviceName = apName;  // Keep BLE name in sync with AP name
+            Serial.printf("🔧 WiFi AP Name updated to: %s (BLE will use on restart)\n", apName.c_str());
             saveSettings(); // Auto-save
         }
         if (doc.containsKey("apPassword")) {
             apPassword = doc["apPassword"].as<String>();
             Serial.printf("🔧 WiFi AP Password updated to: %s\n", apPassword.c_str());
             saveSettings(); // Auto-save
+        }
+        if (doc.containsKey("restoreDefaults") && doc["restoreDefaults"]) {
+            restoreDefaultsToStock();
+            server.sendHeader("Access-Control-Allow-Origin", "*");
+            server.send(200, "application/json", "{\"success\":true,\"message\":\"Defaults restored, restarting...\"}");
+            delay(1000);
+            ESP.restart();
         }
         if (doc.containsKey("restart") && doc["restart"]) {
             // Restart the device after a delay
@@ -6352,28 +6486,27 @@ void handleAPI() {
     }
 }
 
-void handleStatus() {
-    DynamicJsonDocument doc(4096);  // Increased size to include presets
+void buildStatusDocument(DynamicJsonDocument& doc) {
     doc["preset"] = currentPreset;
     doc["brightness"] = globalBrightness;
     doc["effectSpeed"] = effectSpeed;
     doc["startup_sequence"] = startupSequence;
     doc["startup_sequence_name"] = getStartupSequenceName(startupSequence);
     doc["startup_duration"] = startupDuration;
-    
+
     // Motion control status
     doc["motion_enabled"] = motionEnabled;
     doc["blinker_enabled"] = blinkerEnabled;
     doc["park_mode_enabled"] = parkModeEnabled;
     doc["impact_detection_enabled"] = impactDetectionEnabled;
     doc["motion_sensitivity"] = motionSensitivity;
-    
+
     // Direction-based lighting status
     doc["direction_based_lighting"] = directionBasedLighting;
     doc["headlight_mode"] = headlightMode;
     doc["is_moving_forward"] = isMovingForward;
     doc["forward_accel_threshold"] = forwardAccelThreshold;
-    
+
     // Braking detection status
     doc["braking_enabled"] = brakingEnabled;
     doc["braking_active"] = brakingActive;
@@ -6381,7 +6514,7 @@ void handleStatus() {
     doc["braking_effect"] = brakingEffect;
     doc["braking_brightness"] = brakingBrightness;
     doc["manual_brake_active"] = manualBrakeActive;
-    
+
     doc["blinker_delay"] = blinkerDelay;
     doc["blinker_timeout"] = blinkerTimeout;
     doc["park_detection_angle"] = parkDetectionAngle;
@@ -6405,7 +6538,7 @@ void handleStatus() {
     doc["calibration_complete"] = calibrationComplete;
     doc["calibration_mode"] = calibrationMode;
     doc["calibration_step"] = calibrationStep;
-    
+
     // OTA Update status
     doc["ota_update_url"] = otaUpdateURL;
     doc["ota_in_progress"] = otaInProgress;
@@ -6426,15 +6559,15 @@ void handleStatus() {
     doc["taillightBackgroundColor"] = formatColorHex(taillightBackgroundColor);
     doc["headlightEffect"] = headlightEffect;
     doc["taillightEffect"] = taillightEffect;
-    
-    // Add LED configuration to status
+
+    // LED configuration
     doc["headlightLedCount"] = headlightLedCount;
     doc["taillightLedCount"] = taillightLedCount;
     doc["headlightLedType"] = headlightLedType;
     doc["taillightLedType"] = taillightLedType;
     doc["headlightColorOrder"] = headlightColorOrder;
     doc["taillightColorOrder"] = taillightColorOrder;
-    
+
     // ESPNow status
     doc["enableESPNow"] = enableESPNow;
     doc["useESPNowSync"] = useESPNowSync;
@@ -6446,7 +6579,7 @@ void handleStatus() {
             : "Inactive";
     doc["espNowPeerCount"] = espNowPeerCount;
     doc["espNowLastSend"] = (lastESPNowSend > 0) ? String((millis() - lastESPNowSend) / 1000) + "s ago" : "Never";
-    
+
     // Preset list
     doc["presetCount"] = presetCount;
     JsonArray presetArray = doc.createNestedArray("presets");
@@ -6462,59 +6595,30 @@ void handleStatus() {
     doc["deviceName"] = deviceName;
     doc["hasGroupMaster"] = hasGroupMaster;
     doc["groupMasterMac"] = hasGroupMaster ? formatMacAddress(groupMasterMac) : "";
-    
+
     // Bluetooth status
     doc["bluetoothEnabled"] = bluetoothEnabled;
     doc["bluetoothDeviceName"] = bluetoothDeviceName;
     doc["bluetoothConnected"] = deviceConnected;
-    
+
     // RGBW white channel status
     doc["rgbw_white_mode"] = rgbwWhiteMode;
     doc["white_leds_enabled"] = whiteLEDsEnabled;
-    
+}
+
+void handleStatus() {
+    DynamicJsonDocument doc(4096);
+    buildStatusDocument(doc);
     server.sendHeader("Access-Control-Allow-Origin", "*");
     sendJSONResponse(doc);
 }
 
 String getStatusJSON() {
-    // Use heap allocation to avoid stack overflow
-    DynamicJsonDocument* doc = new DynamicJsonDocument(4096);
-    
-    // Essential status only for BLE (reduced data to prevent overflow)
-    (*doc)["preset"] = currentPreset;
-    (*doc)["presetCount"] = presetCount;
-    JsonArray presetArray = doc->createNestedArray("presets");
-    for (uint8_t i = 0; i < presetCount; i++) {
-        JsonObject presetObj = presetArray.createNestedObject();
-        presetObj["name"] = presets[i].name;
-    }
-    (*doc)["brightness"] = globalBrightness;
-    (*doc)["effectSpeed"] = effectSpeed;
-    (*doc)["motion_enabled"] = motionEnabled;
-    (*doc)["blinker_enabled"] = blinkerEnabled;
-    (*doc)["park_mode_enabled"] = parkModeEnabled;
-    (*doc)["headlightColor"] = formatColorHex(headlightColor);
-    (*doc)["taillightColor"] = formatColorHex(taillightColor);
-    (*doc)["headlightEffect"] = headlightEffect;
-    (*doc)["taillightEffect"] = taillightEffect;
-    (*doc)["headlightBackgroundEnabled"] = headlightBackgroundEnabled;
-    (*doc)["taillightBackgroundEnabled"] = taillightBackgroundEnabled;
-    (*doc)["headlightBackgroundColor"] = formatColorHex(headlightBackgroundColor);
-    (*doc)["taillightBackgroundColor"] = formatColorHex(taillightBackgroundColor);
-    (*doc)["bluetoothEnabled"] = bluetoothEnabled;
-    (*doc)["bluetoothDeviceName"] = bluetoothDeviceName;
-    (*doc)["bluetoothConnected"] = deviceConnected;
-    (*doc)["direction_based_lighting"] = directionBasedLighting;
-    (*doc)["headlight_mode"] = headlightMode;
-    (*doc)["is_moving_forward"] = isMovingForward;
-    (*doc)["forward_accel_threshold"] = forwardAccelThreshold;
-    
+    // Full status for both HTTP and BLE - single source of truth
+    DynamicJsonDocument doc(4096);
+    buildStatusDocument(doc);
     String jsonString;
-    serializeJson(*doc, jsonString);
-    
-    // Clean up memory
-    delete doc;
-    
+    serializeJson(doc, jsonString);
     return jsonString;
 }
 
@@ -6590,13 +6694,22 @@ void handleLEDTest() {
 }
 
 void handleGetSettings() {
-    // Try to get settings from NVS first (primary storage)
+    // Try to get settings from NVS first (primary storage; chunked or legacy)
     String settingsJson;
     nvs.begin(NVS_NAMESPACE, true); // Open read-only
-    if (nvs.isKey("settings")) {
-        settingsJson = nvs.getString("settings");
+    if (nvs.isKey(NVS_KEY_CHUNK_COUNT)) {
+        uint8_t numChunks = nvs.getUChar(NVS_KEY_CHUNK_COUNT, 0);
+        settingsJson.reserve(numChunks * NVS_CHUNK_SIZE);
+        for (uint8_t i = 0; i < numChunks; i++) {
+            String key = "s" + String(i);
+            settingsJson += nvs.getString(key.c_str(), "");
+        }
         nvs.end();
-        Serial.println("📄 Returning settings from NVS");
+        Serial.println("📄 Returning settings from NVS (chunked)");
+    } else if (nvs.isKey("settings")) {
+        settingsJson = nvs.getString("settings", "");
+        nvs.end();
+        Serial.println("📄 Returning settings from NVS (legacy)");
     } else {
         nvs.end();
         // Fallback to SPIFFS
@@ -7003,7 +7116,9 @@ bool saveSettings() {
     doc["calibration_right_y"] = calibration.rightAccelY;
     doc["calibration_right_z"] = calibration.rightAccelZ;
     
-    // Save to NVS (primary storage - survives OTA filesystem updates)
+    // Save to both NVS and SPIFFS (same data):
+    // - NVS: primary; survives OTA/filesystem wipes (chunked to fit 508-byte-per-key limit).
+    // - SPIFFS: backward compatibility, migration, and GET /api/settings fallback.
     bool nvsSuccess = saveSettingsToNVS();
     
     // Also save to SPIFFS for backward compatibility and migration
@@ -7166,12 +7281,31 @@ bool saveSettingsToNVS() {
     String jsonString;
     serializeJson(doc, jsonString);
     
-    // Save to NVS (max 4000 bytes per key, so we'll use a single key)
-    size_t bytesWritten = nvs.putString("settings", jsonString);
+    // NVS allows only ~508 bytes per key; chunk the JSON into NVS_CHUNK_SIZE pieces
+    size_t len = jsonString.length();
+    uint8_t numChunks = (len + NVS_CHUNK_SIZE - 1) / NVS_CHUNK_SIZE;
+    if (numChunks > 200) {
+        Serial.println("❌ Settings too large for NVS (chunk limit)");
+        nvs.end();
+        return false;
+    }
+    bool ok = true;
+    for (uint8_t i = 0; i < numChunks && ok; i++) {
+        size_t start = i * NVS_CHUNK_SIZE;
+        size_t chunkLen = (start + NVS_CHUNK_SIZE <= len) ? NVS_CHUNK_SIZE : (len - start);
+        String key = "s" + String(i);
+        if (nvs.putString(key.c_str(), jsonString.substring(start, start + chunkLen)) == 0) {
+            ok = false;
+        }
+    }
+    if (ok) {
+        nvs.putUChar(NVS_KEY_CHUNK_COUNT, numChunks);
+        nvs.remove("settings");  // remove legacy single-key if present
+    }
     nvs.end();
     
-    if (bytesWritten > 0) {
-        Serial.printf("✅ Settings saved to NVS (%d bytes)\n", bytesWritten);
+    if (ok) {
+        Serial.printf("✅ Settings saved to NVS (%d bytes, %d chunks)\n", (int)len, numChunks);
         return true;
     } else {
         Serial.println("❌ Failed to write settings to NVS");
@@ -7316,10 +7450,11 @@ bool loadSettings() {
     headlightColorOrder = doc["headlight_order"] | 1;  // GRB - Default for SK6812 RGBW
     taillightColorOrder = doc["taillight_order"] | 1;  // GRB - Default for SK6812 RGBW
     
-    // Load WiFi settings
-    apName = doc["apName"] | "ARKLIGHTS-AP";
+    // Load WiFi settings (unique default AP name from MAC to avoid conflicts when devices are near)
+    apName = doc["apName"] | getDefaultApName();
+    bluetoothDeviceName = apName;  // Keep BLE name in sync with AP name
     apPassword = doc["apPassword"] | "float420";
-    Serial.printf("📡 Loaded WiFi settings: AP=%s, Password=%s\n", apName.c_str(), apPassword.c_str());
+    Serial.printf("📡 Loaded WiFi settings: AP=%s, BLE=%s, Password=%s\n", apName.c_str(), bluetoothDeviceName.c_str(), apPassword.c_str());
     
     // Load ESPNow settings
     enableESPNow = doc["enableESPNow"] | true;
@@ -7392,9 +7527,9 @@ bool loadSettings() {
                   getStartupSequenceName(startupSequence).c_str(), startupDuration, startupEnabled ? "Yes" : "No");
     
     // Defer NVS migration to after LEDs are shown (non-blocking)
-    // Check if migration is needed
+    // Check if migration is needed (chunked "sc" or legacy "settings")
     nvs.begin(NVS_NAMESPACE, true); // Open read-only to check
-    bool nvsHasData = nvs.isKey("settings");
+    bool nvsHasData = nvs.isKey(NVS_KEY_CHUNK_COUNT) || nvs.isKey("settings");
     nvs.end();
     
     if (!nvsHasData) {
@@ -7417,13 +7552,33 @@ bool loadSettingsFromNVS() {
         return false;
     }
     
-    if (!nvs.isKey("settings")) {
+    String jsonString;
+    if (nvs.isKey(NVS_KEY_CHUNK_COUNT)) {
+        // Chunked format (current)
+        uint8_t numChunks = nvs.getUChar(NVS_KEY_CHUNK_COUNT, 0);
+        if (numChunks == 0) {
+            Serial.println("⚠️ No NVS chunk count");
+            nvs.end();
+            return false;
+        }
+        jsonString.reserve(numChunks * NVS_CHUNK_SIZE);
+        for (uint8_t i = 0; i < numChunks; i++) {
+            String key = "s" + String(i);
+            if (!nvs.isKey(key.c_str())) {
+                Serial.printf("⚠️ NVS chunk %s missing\n", key.c_str());
+                nvs.end();
+                return false;
+            }
+            jsonString += nvs.getString(key.c_str(), "");
+        }
+    } else if (nvs.isKey("settings")) {
+        // Legacy single-key (only works if blob was < 508 bytes)
+        jsonString = nvs.getString("settings", "");
+    } else {
         Serial.println("⚠️ No settings found in NVS");
         nvs.end();
         return false;
     }
-    
-    String jsonString = nvs.getString("settings");
     nvs.end();
     
     if (jsonString.length() == 0) {
@@ -7431,7 +7586,7 @@ bool loadSettingsFromNVS() {
         return false;
     }
     
-    DynamicJsonDocument doc(4096);
+    DynamicJsonDocument doc(8192);
     DeserializationError error = deserializeJson(doc, jsonString);
     
     if (error) {
@@ -7513,8 +7668,9 @@ bool loadSettingsFromNVS() {
     headlightColorOrder = doc["headlight_order"] | 1;
     taillightColorOrder = doc["taillight_order"] | 1;
     
-    // Load WiFi settings
-    apName = doc["apName"] | "ARKLIGHTS-AP";
+    // Load WiFi settings (unique default AP name from MAC)
+    apName = doc["apName"] | getDefaultApName();
+    bluetoothDeviceName = apName;  // Keep BLE name in sync with AP name
     apPassword = doc["apPassword"] | "float420";
     
     // Load ESPNow settings
@@ -7574,13 +7730,13 @@ bool migrateSettingsFromSPIFFSToNVS() {
         return false;
     }
     
-    // Check if NVS already has settings
+    // Check if NVS already has settings (chunked or legacy)
     if (!nvs.begin(NVS_NAMESPACE, true)) {
         file.close();
         return false;
     }
     
-    bool nvsHasCalibration = nvs.isKey("settings");
+    bool nvsHasCalibration = nvs.isKey(NVS_KEY_CHUNK_COUNT) || nvs.isKey("settings");
     nvs.end();
     
     if (nvsHasCalibration) {
@@ -8174,6 +8330,18 @@ String formatColorHex(const CRGB& color) {
     char buffer[7];
     snprintf(buffer, sizeof(buffer), "%02x%02x%02x", color.r, color.g, color.b);
     return String(buffer);
+}
+
+// Generate unique default AP/BLE name: ARKLIGHTS-XXXXXX (last 3 bytes of MAC as hex)
+String getDefaultApName() {
+    uint64_t chipId = ESP.getEfuseMac();
+    uint8_t macBytes[6];
+    for (int i = 0; i < 6; i++) {
+        macBytes[i] = (chipId >> (40 - i * 8)) & 0xFF;
+    }
+    char suffix[7];
+    snprintf(suffix, sizeof(suffix), "%02X%02X%02X", macBytes[3], macBytes[4], macBytes[5]);
+    return String("ARKLIGHTS-") + suffix;
 }
 
 String formatMacAddress(const uint8_t* mac) {

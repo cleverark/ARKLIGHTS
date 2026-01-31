@@ -391,6 +391,10 @@ class ArkLightsApiService(private val bluetoothService: BluetoothService) {
             restart = true
         ))
     }
+
+    suspend fun restoreDefaults(): Boolean {
+        return sendControlRequest(LEDControlRequest(restoreDefaults = true))
+    }
     
     suspend fun setESPNowEnabled(enabled: Boolean): Boolean {
         return sendControlRequest(LEDControlRequest(enableESPNow = enabled))
