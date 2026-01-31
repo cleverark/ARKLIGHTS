@@ -186,7 +186,9 @@ class ArkLightsViewModel(
     }
     
     suspend fun setHeadlightColor(color: String) {
-        apiService.setHeadlightColor(color)
+        // Strip # prefix if present - device expects color without #
+        val cleanColor = color.removePrefix("#")
+        apiService.setHeadlightColor(cleanColor)
         refreshStatus()
     }
 
@@ -196,12 +198,15 @@ class ArkLightsViewModel(
     }
 
     suspend fun setHeadlightBackgroundColor(color: String) {
-        apiService.setHeadlightBackgroundColor(color)
+        val cleanColor = color.removePrefix("#")
+        apiService.setHeadlightBackgroundColor(cleanColor)
         refreshStatus()
     }
     
     suspend fun setTaillightColor(color: String) {
-        apiService.setTaillightColor(color)
+        // Strip # prefix if present - device expects color without #
+        val cleanColor = color.removePrefix("#")
+        apiService.setTaillightColor(cleanColor)
         refreshStatus()
     }
 
@@ -211,7 +216,8 @@ class ArkLightsViewModel(
     }
 
     suspend fun setTaillightBackgroundColor(color: String) {
-        apiService.setTaillightBackgroundColor(color)
+        val cleanColor = color.removePrefix("#")
+        apiService.setTaillightBackgroundColor(cleanColor)
         refreshStatus()
     }
     

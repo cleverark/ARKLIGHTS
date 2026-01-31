@@ -152,7 +152,8 @@ fun MainControlsPage(
             title = "Headlight",
             currentColor = deviceStatus?.headlightColor,
             currentEffect = deviceStatus?.headlightEffect,
-            defaultColors = listOf("#FFFFFF", "#FF0000", "#00FF00", "#0000FF", "#FFFF00", "#FF00FF", "#00FFFF"),
+            backgroundEnabled = deviceStatus?.headlightBackgroundEnabled ?: false,
+            backgroundColor = deviceStatus?.headlightBackgroundColor,
             onColorChange = { color ->
                 scope.launch {
                     viewModel.setHeadlightColor(color)
@@ -162,6 +163,16 @@ fun MainControlsPage(
                 scope.launch {
                     viewModel.setHeadlightEffect(effect)
                 }
+            },
+            onBackgroundEnabledChange = { enabled ->
+                scope.launch {
+                    viewModel.setHeadlightBackgroundEnabled(enabled)
+                }
+            },
+            onBackgroundColorChange = { color ->
+                scope.launch {
+                    viewModel.setHeadlightBackgroundColor(color)
+                }
             }
         )
         
@@ -170,7 +181,8 @@ fun MainControlsPage(
             title = "Taillight",
             currentColor = deviceStatus?.taillightColor,
             currentEffect = deviceStatus?.taillightEffect,
-            defaultColors = listOf("#FF0000", "#FFFFFF", "#FF6600", "#FFFF00", "#FF00FF", "#00FFFF", "#0000FF"),
+            backgroundEnabled = deviceStatus?.taillightBackgroundEnabled ?: false,
+            backgroundColor = deviceStatus?.taillightBackgroundColor,
             onColorChange = { color ->
                 scope.launch {
                     viewModel.setTaillightColor(color)
@@ -179,6 +191,16 @@ fun MainControlsPage(
             onEffectChange = { effect ->
                 scope.launch {
                     viewModel.setTaillightEffect(effect)
+                }
+            },
+            onBackgroundEnabledChange = { enabled ->
+                scope.launch {
+                    viewModel.setTaillightBackgroundEnabled(enabled)
+                }
+            },
+            onBackgroundColorChange = { color ->
+                scope.launch {
+                    viewModel.setTaillightBackgroundColor(color)
                 }
             }
         )
@@ -216,6 +238,44 @@ fun MainControlsPage(
             onMotionSensitivityChange = { sensitivity ->
                 scope.launch {
                     viewModel.setMotionSensitivity(sensitivity)
+                }
+            },
+            // Direction-based lighting
+            onDirectionBasedLightingEnabled = { enabled ->
+                scope.launch {
+                    viewModel.setDirectionBasedLighting(enabled)
+                }
+            },
+            onForwardAccelThresholdChange = { threshold ->
+                scope.launch {
+                    viewModel.setForwardAccelThreshold(threshold)
+                }
+            },
+            // Braking
+            onBrakingEnabled = { enabled ->
+                scope.launch {
+                    viewModel.setBrakingEnabled(enabled)
+                }
+            },
+            onBrakingThresholdChange = { threshold ->
+                scope.launch {
+                    viewModel.setBrakingThreshold(threshold)
+                }
+            },
+            onBrakingBrightnessChange = { brightness ->
+                scope.launch {
+                    viewModel.setBrakingBrightness(brightness)
+                }
+            },
+            // Manual controls
+            onManualBlinkerChange = { direction ->
+                scope.launch {
+                    viewModel.setManualBlinker(direction)
+                }
+            },
+            onManualBrakeChange = { enabled ->
+                scope.launch {
+                    viewModel.setManualBrake(enabled)
                 }
             }
         )
@@ -447,5 +507,8 @@ fun SettingsPage(
                 }
             }
         )
+        
+        // Device Status Debug Section - Shows raw data from controller
+        DeviceStatusDebugSection(deviceStatus = deviceStatus)
     }
 }

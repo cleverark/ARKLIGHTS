@@ -3,17 +3,18 @@ package com.example.arklights.data
 import kotlinx.serialization.Serializable
 
 // LED Effect IDs (matching the C++ definitions)
+// PEV-friendly effects optimized for personal electric vehicles
 object LEDEffects {
     const val SOLID = 0
     const val BREATH = 1
     const val RAINBOW = 2
-    const val CHASE = 3
+    const val PULSE = 3              // PEV-friendly: smooth rhythmic pulsing (replaced Chase)
     const val BLINK_RAINBOW = 4
-    const val TWINKLE = 5
+    const val GRADIENT_SHIFT = 5     // PEV-friendly: moving color gradient (replaced Twinkle)
     const val FIRE = 6
     const val METEOR = 7
     const val WAVE = 8
-    const val COMET = 9
+    const val CENTER_BURST = 9       // PEV-friendly: expands from center (replaced Comet)
     const val CANDLE = 10
     const val STATIC_RAINBOW = 11
     const val KNIGHT_RIDER = 12
@@ -22,7 +23,7 @@ object LEDEffects {
     const val LARSON_SCANNER = 15
     const val COLOR_WIPE = 16
     const val RAINBOW_WIPE = 23
-    const val THEATER_CHASE = 17
+    const val HAZARD = 17            // PEV-friendly: alternating halves (replaced Theater Chase)
     const val RUNNING_LIGHTS = 18
     const val COLOR_SWEEP = 19
     const val RAINBOW_KNIGHT_RIDER = 20
@@ -33,13 +34,13 @@ object LEDEffects {
         SOLID to "Solid",
         BREATH to "Breath",
         RAINBOW to "Rainbow",
-        CHASE to "Chase",
+        PULSE to "Pulse",                    // Smooth rhythmic brightness pulsing
         BLINK_RAINBOW to "Blink Rainbow",
-        TWINKLE to "Twinkle",
+        GRADIENT_SHIFT to "Gradient Shift",  // Moving color gradient across strip
         FIRE to "Fire",
         METEOR to "Meteor",
         WAVE to "Wave",
-        COMET to "Comet",
+        CENTER_BURST to "Center Burst",      // Expands outward from center
         CANDLE to "Candle",
         STATIC_RAINBOW to "Static Rainbow",
         KNIGHT_RIDER to "Knight Rider",
@@ -48,7 +49,7 @@ object LEDEffects {
         LARSON_SCANNER to "Larson Scanner",
         COLOR_WIPE to "Color Wipe",
         RAINBOW_WIPE to "Rainbow Wipe",
-        THEATER_CHASE to "Theater Chase",
+        HAZARD to "Hazard",                  // Alternating halves for visibility
         RUNNING_LIGHTS to "Running Lights",
         COLOR_SWEEP to "Color Sweep",
         RAINBOW_KNIGHT_RIDER to "Rainbow Knight Rider",

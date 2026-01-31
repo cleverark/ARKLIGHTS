@@ -323,13 +323,13 @@ String bluetoothDeviceName = "ARKLIGHTS-AP";
 #define FX_SOLID 0
 #define FX_BREATH 1
 #define FX_RAINBOW 2
-#define FX_CHASE 3
+#define FX_PULSE 3              // Replaced FX_CHASE - smooth rhythmic pulsing
 #define FX_BLINK_RAINBOW 4
-#define FX_TWINKLE 5
+#define FX_GRADIENT_SHIFT 5     // Replaced FX_TWINKLE - color gradient that moves
 #define FX_FIRE 6
 #define FX_METEOR 7
 #define FX_WAVE 8
-#define FX_COMET 9
+#define FX_CENTER_BURST 9       // Replaced FX_COMET - expands from center outward
 #define FX_CANDLE 10
 #define FX_STATIC_RAINBOW 11
 #define FX_KNIGHT_RIDER 12
@@ -338,7 +338,7 @@ String bluetoothDeviceName = "ARKLIGHTS-AP";
 #define FX_LARSON_SCANNER 15
 #define FX_COLOR_WIPE 16
 #define FX_RAINBOW_WIPE 23
-#define FX_THEATER_CHASE 17
+#define FX_HAZARD 17            // Replaced FX_THEATER_CHASE - alternating halves flash
 #define FX_RUNNING_LIGHTS 18
 #define FX_COLOR_SWEEP 19
 #define FX_RAINBOW_KNIGHT_RIDER 20
@@ -734,13 +734,13 @@ void updateSoftAPChannel();
 // Original effect functions (kept for compatibility)
 void effectBreath(CRGB* leds, uint8_t numLeds, CRGB color);
 void effectRainbow(CRGB* leds, uint8_t numLeds);
-void effectChase(CRGB* leds, uint8_t numLeds, CRGB color);
+void effectPulse(CRGB* leds, uint8_t numLeds, CRGB color);           // PEV-friendly: smooth rhythmic pulsing
 void effectBlinkRainbow(CRGB* leds, uint8_t numLeds);
-void effectTwinkle(CRGB* leds, uint8_t numLeds, CRGB color);
+void effectGradientShift(CRGB* leds, uint8_t numLeds, CRGB color);   // PEV-friendly: moving color gradient
 void effectFire(CRGB* leds, uint8_t numLeds);
 void effectMeteor(CRGB* leds, uint8_t numLeds, CRGB color);
 void effectWave(CRGB* leds, uint8_t numLeds, CRGB color);
-void effectComet(CRGB* leds, uint8_t numLeds, CRGB color);
+void effectCenterBurst(CRGB* leds, uint8_t numLeds, CRGB color);     // PEV-friendly: center expansion
 void effectCandle(CRGB* leds, uint8_t numLeds);
 void effectStaticRainbow(CRGB* leds, uint8_t numLeds);
 void effectKnightRider(CRGB* leds, uint8_t numLeds, CRGB color);
@@ -748,20 +748,20 @@ void effectPolice(CRGB* leds, uint8_t numLeds);
 void effectStrobe(CRGB* leds, uint8_t numLeds, CRGB color);
 void effectLarsonScanner(CRGB* leds, uint8_t numLeds, CRGB color);
 void effectColorWipe(CRGB* leds, uint8_t numLeds, CRGB color);
-void effectTheaterChase(CRGB* leds, uint8_t numLeds, CRGB color);
+void effectHazard(CRGB* leds, uint8_t numLeds, CRGB color);          // PEV-friendly: alternating halves
 void effectRunningLights(CRGB* leds, uint8_t numLeds, CRGB color);
 void effectColorSweep(CRGB* leds, uint8_t numLeds, CRGB color);
 
 // Improved effect functions with consistent timing
 void effectBreathImproved(CRGB* leds, uint8_t numLeds, CRGB color, uint16_t step);
 void effectRainbowImproved(CRGB* leds, uint8_t numLeds, uint16_t step);
-void effectChaseImproved(CRGB* leds, uint8_t numLeds, CRGB color, uint16_t step);
+void effectPulseImproved(CRGB* leds, uint8_t numLeds, CRGB color, uint16_t step);           // PEV-friendly
 void effectBlinkRainbowImproved(CRGB* leds, uint8_t numLeds, uint16_t step);
-void effectTwinkleImproved(CRGB* leds, uint8_t numLeds, CRGB color, uint16_t step);
+void effectGradientShiftImproved(CRGB* leds, uint8_t numLeds, CRGB color, uint16_t step);   // PEV-friendly
 void effectFireImproved(CRGB* leds, uint8_t numLeds, uint16_t step);
 void effectMeteorImproved(CRGB* leds, uint8_t numLeds, CRGB color, uint16_t step);
 void effectWaveImproved(CRGB* leds, uint8_t numLeds, CRGB color, uint16_t step);
-void effectCometImproved(CRGB* leds, uint8_t numLeds, CRGB color, uint16_t step);
+void effectCenterBurstImproved(CRGB* leds, uint8_t numLeds, CRGB color, uint16_t step);     // PEV-friendly
 void effectCandleImproved(CRGB* leds, uint8_t numLeds, uint16_t step);
 void effectKnightRiderImproved(CRGB* leds, uint8_t numLeds, CRGB color, uint16_t step);
 void effectPoliceImproved(CRGB* leds, uint8_t numLeds, uint16_t step);
@@ -769,7 +769,7 @@ void effectStrobeImproved(CRGB* leds, uint8_t numLeds, CRGB color, uint16_t step
 void effectLarsonScannerImproved(CRGB* leds, uint8_t numLeds, CRGB color, uint16_t step);
 void effectColorWipeImproved(CRGB* leds, uint8_t numLeds, CRGB color, uint16_t step);
 void effectRainbowWipeImproved(CRGB* leds, uint8_t numLeds, uint16_t step);
-void effectTheaterChaseImproved(CRGB* leds, uint8_t numLeds, CRGB color, uint16_t step);
+void effectHazardImproved(CRGB* leds, uint8_t numLeds, CRGB color, uint16_t step);          // PEV-friendly
 void effectRunningLightsImproved(CRGB* leds, uint8_t numLeds, CRGB color, uint16_t step);
 void effectColorSweepImproved(CRGB* leds, uint8_t numLeds, CRGB color, uint16_t step);
 void effectRainbowKnightRiderImproved(CRGB* leds, uint8_t numLeds, uint16_t step);
@@ -1108,14 +1108,14 @@ uint8_t getEffectSpeedMultiplier(uint8_t effect) {
         case FX_RAINBOW:
         case FX_BLINK_RAINBOW:
             return 2; // Rainbow effects: slight boost for visibility (reduced from 8x)
-        case FX_CHASE:
+        case FX_PULSE:
         case FX_METEOR:
-        case FX_COMET:
+        case FX_CENTER_BURST:
             return 1; // Movement effects: normal speed (removed multiplier)
         case FX_WAVE:
         case FX_COLOR_WIPE:
         case FX_RAINBOW_WIPE:
-        case FX_THEATER_CHASE:
+        case FX_HAZARD:
         case FX_RUNNING_LIGHTS:
         case FX_COLOR_SWEEP:
         case FX_RAINBOW_KNIGHT_RIDER:
@@ -1186,14 +1186,14 @@ void applyEffectToArray(CRGB* leds, uint8_t numLeds, uint8_t effect, CRGB color,
         case FX_RAINBOW:
             effectRainbowImproved(leds, numLeds, timing.step);
             break;
-        case FX_CHASE:
-            effectChaseImproved(leds, numLeds, color, timing.step);
+        case FX_PULSE:
+            effectPulseImproved(leds, numLeds, color, timing.step);
             break;
         case FX_BLINK_RAINBOW:
             effectBlinkRainbowImproved(leds, numLeds, timing.step);
             break;
-        case FX_TWINKLE:
-            effectTwinkleImproved(leds, numLeds, color, timing.step);
+        case FX_GRADIENT_SHIFT:
+            effectGradientShiftImproved(leds, numLeds, color, timing.step);
             break;
         case FX_FIRE:
             effectFireImproved(leds, numLeds, timing.step);
@@ -1204,8 +1204,8 @@ void applyEffectToArray(CRGB* leds, uint8_t numLeds, uint8_t effect, CRGB color,
         case FX_WAVE:
             effectWaveImproved(leds, numLeds, color, timing.step);
             break;
-        case FX_COMET:
-            effectCometImproved(leds, numLeds, color, timing.step);
+        case FX_CENTER_BURST:
+            effectCenterBurstImproved(leds, numLeds, color, timing.step);
             break;
         case FX_CANDLE:
             effectCandleImproved(leds, numLeds, timing.step);
@@ -1231,8 +1231,8 @@ void applyEffectToArray(CRGB* leds, uint8_t numLeds, uint8_t effect, CRGB color,
         case FX_RAINBOW_WIPE:
             effectRainbowWipeImproved(leds, numLeds, timing.step);
             break;
-        case FX_THEATER_CHASE:
-            effectTheaterChaseImproved(leds, numLeds, color, timing.step);
+        case FX_HAZARD:
+            effectHazardImproved(leds, numLeds, color, timing.step);
             break;
         case FX_RUNNING_LIGHTS:
             effectRunningLightsImproved(leds, numLeds, color, timing.step);
@@ -1472,13 +1472,21 @@ void effectRainbow(CRGB* leds, uint8_t numLeds) {
     effectStep += 2;
 }
 
-void effectChase(CRGB* leds, uint8_t numLeds, CRGB color) {
-    uint8_t pos = effectStep % numLeds;
-    fill_solid(leds, numLeds, getEffectBackgroundColor());
-    leds[pos] = color;
-    // Speed control: higher speed = faster movement
-    uint8_t stepSize = map(effectSpeed, 0, 255, 1, 2); // Even slower - max 2 steps (was 3)
-    effectStep += stepSize;
+// PEV-Friendly: Smooth Pulse Effect - rhythmic brightness pulsing like a heartbeat
+void effectPulse(CRGB* leds, uint8_t numLeds, CRGB color) {
+    // Calculate pulse timing based on effectSpeed (slower = longer pulse cycle)
+    uint16_t pulseSpeed = map(effectSpeed, 0, 255, 4000, 500); // 500ms to 4s per cycle
+    
+    // Use sine wave for smooth pulsing
+    uint16_t phase = (millis() % pulseSpeed) * 256 / pulseSpeed;
+    uint8_t brightness = sin8(phase); // 0-255 sine wave
+    
+    // Ensure minimum visibility
+    brightness = map(brightness, 0, 255, 40, 255);
+    
+    CRGB pulseColor = color;
+    pulseColor.nscale8(brightness);
+    fill_solid(leds, numLeds, pulseColor);
 }
 
 void effectBlinkRainbow(CRGB* leds, uint8_t numLeds) {
@@ -1492,18 +1500,26 @@ void effectBlinkRainbow(CRGB* leds, uint8_t numLeds) {
     }
 }
 
-void effectTwinkle(CRGB* leds, uint8_t numLeds, CRGB color) {
-    // Set background
-    fill_solid(leds, numLeds, getEffectBackgroundColor());
+// PEV-Friendly: Gradient Shift Effect - smooth color gradient that moves along the strip
+void effectGradientShift(CRGB* leds, uint8_t numLeds, CRGB color) {
+    // Calculate shift speed based on effectSpeed
+    uint16_t shiftSpeed = map(effectSpeed, 0, 255, 8000, 1000); // 1s to 8s per cycle
+    uint16_t phase = (millis() % shiftSpeed) * 256 / shiftSpeed;
     
-    // Calculate twinkle speed based on effectSpeed (0-255)
-    uint8_t numTwinkles = map(effectSpeed, 0, 255, numLeds / 8, numLeds / 2);
-    for (uint8_t i = 0; i < numTwinkles; i++) {
-        uint8_t pos = random(numLeds);
-        uint8_t brightness = random(128, 255);
-        CRGB twinkleColor = color;
-        twinkleColor.nscale8(brightness);
-        leds[pos] = twinkleColor;
+    // Get hue from color for gradient variation
+    CHSV hsv = rgb2hsv_approximate(color);
+    
+    for (uint8_t i = 0; i < numLeds; i++) {
+        // Create smooth gradient across the strip
+        uint8_t position = (i * 256 / numLeds + phase) % 256;
+        
+        // Vary brightness smoothly across the strip
+        uint8_t brightness = sin8(position);
+        brightness = map(brightness, 0, 255, 60, 255); // Minimum 60 brightness
+        
+        CRGB gradientColor = color;
+        gradientColor.nscale8(brightness);
+        leds[i] = gradientColor;
     }
 }
 
@@ -1585,28 +1601,34 @@ void effectWave(CRGB* leds, uint8_t numLeds, CRGB color) {
     }
 }
 
-// Comet Effect
-void effectComet(CRGB* leds, uint8_t numLeds, CRGB color) {
-    // Fade all LEDs
+// PEV-Friendly: Center Burst Effect - LEDs expand outward from center
+void effectCenterBurst(CRGB* leds, uint8_t numLeds, CRGB color) {
+    // Calculate burst speed based on effectSpeed
+    uint16_t burstSpeed = map(effectSpeed, 0, 255, 3000, 500); // 500ms to 3s per cycle
+    uint16_t phase = (millis() % burstSpeed) * 256 / burstSpeed;
+    
+    // Use sine wave for smooth expansion/contraction
+    uint8_t expansion = sin8(phase); // 0-255
+    uint8_t maxRadius = numLeds / 2;
+    uint8_t radius = map(expansion, 0, 255, 0, maxRadius);
+    
+    uint8_t center = numLeds / 2;
+    
     for (uint8_t i = 0; i < numLeds; i++) {
-        leds[i].nscale8(200); // Fade by 22%
-    }
-    
-    // Calculate comet speed and size
-    uint8_t cometSize = map(effectSpeed, 0, 255, 2, 8);
-    uint8_t cometPos = (effectStep / 3) % (numLeds + cometSize);
-    
-    // Draw comet with tail
-    for (uint8_t i = 0; i < cometSize; i++) {
-        if (cometPos - i >= 0 && cometPos - i < numLeds) {
-            uint8_t brightness = 255 - (i * 255 / cometSize);
-            CRGB cometColor = color;
-            cometColor.nscale8(brightness);
-            leds[cometPos - i] = cometColor;
+        uint8_t distance = abs((int)i - (int)center);
+        
+        if (distance <= radius) {
+            // Inside the burst - calculate brightness based on distance from edge
+            uint8_t edgeDistance = radius - distance;
+            uint8_t brightness = map(edgeDistance, 0, radius > 0 ? radius : 1, 100, 255);
+            CRGB burstColor = color;
+            burstColor.nscale8(brightness);
+            leds[i] = burstColor;
+        } else {
+            // Outside the burst
+            leds[i] = getEffectBackgroundColor();
         }
     }
-    
-    effectStep++;
 }
 
 // Candle Effect
@@ -1743,16 +1765,24 @@ void effectColorWipe(CRGB* leds, uint8_t numLeds, CRGB color) {
 }
 
 // Electrolyte-style Theater Chase Effect
-void effectTheaterChase(CRGB* leds, uint8_t numLeds, CRGB color) {
-    // Calculate chase speed
-    uint16_t chaseSpeed = map(effectSpeed, 0, 255, 1000, 100);
-    uint8_t chaseStep = (millis() / chaseSpeed) % 3;
+// PEV-Friendly: Hazard Effect - alternating halves for high visibility
+void effectHazard(CRGB* leds, uint8_t numLeds, CRGB color) {
+    // Calculate flash rate based on effectSpeed (not too fast to avoid strobe)
+    uint16_t flashRate = map(effectSpeed, 0, 255, 1500, 400); // 400ms to 1.5s per cycle
+    bool firstHalf = ((millis() / flashRate) % 2) == 0;
+    
+    uint8_t midPoint = numLeds / 2;
     
     for (uint8_t i = 0; i < numLeds; i++) {
-        if ((i + chaseStep) % 3 == 0) {
+        bool isFirstHalf = (i < midPoint);
+        
+        if ((isFirstHalf && firstHalf) || (!isFirstHalf && !firstHalf)) {
             leds[i] = color;
         } else {
-            leds[i] = getEffectBackgroundColor();
+            // Dim the other half instead of turning off completely
+            CRGB dimColor = color;
+            dimColor.nscale8(40); // 15% brightness
+            leds[i] = dimColor;
         }
     }
 }
@@ -1829,12 +1859,18 @@ void effectRainbowImproved(CRGB* leds, uint8_t numLeds, uint16_t step) {
 }
 
 // Improved Chase Effect with consistent timing
-void effectChaseImproved(CRGB* leds, uint8_t numLeds, CRGB color, uint16_t step) {
-    // Apply speed multiplier for faster movement
-    uint8_t multiplier = getEffectSpeedMultiplier(FX_CHASE);
-    uint8_t pos = (step * multiplier) % numLeds;
-    fill_solid(leds, numLeds, getEffectBackgroundColor());
-    leds[pos] = color;
+// PEV-Friendly: Improved Pulse Effect with consistent timing
+void effectPulseImproved(CRGB* leds, uint8_t numLeds, CRGB color, uint16_t step) {
+    // Use step for consistent timing across synced devices
+    uint8_t phase = (step * 4) % 256; // Smooth cycle
+    uint8_t brightness = sin8(phase);
+    
+    // Ensure minimum visibility
+    brightness = map(brightness, 0, 255, 40, 255);
+    
+    CRGB pulseColor = color;
+    pulseColor.nscale8(brightness);
+    fill_solid(leds, numLeds, pulseColor);
 }
 
 // Improved Blink Rainbow Effect with consistent timing
@@ -1849,19 +1885,22 @@ void effectBlinkRainbowImproved(CRGB* leds, uint8_t numLeds, uint16_t step) {
 }
 
 // Improved Twinkle Effect with consistent timing
-void effectTwinkleImproved(CRGB* leds, uint8_t numLeds, CRGB color, uint16_t step) {
-    // Set background
-    fill_solid(leds, numLeds, getEffectBackgroundColor());
+// PEV-Friendly: Improved Gradient Shift Effect with consistent timing
+void effectGradientShiftImproved(CRGB* leds, uint8_t numLeds, CRGB color, uint16_t step) {
+    // Use step for consistent timing across synced devices
+    uint8_t phase = (step * 2) % 256;
     
-    // Use step to determine number of twinkles (more consistent)
-    uint8_t numTwinkles = 2 + (step % (numLeds / 4));
-    
-    for (uint8_t i = 0; i < numTwinkles; i++) {
-        uint8_t pos = (step * 7 + i * 13) % numLeds; // Pseudo-random but consistent
-        uint8_t brightness = 128 + (step % 128);
-        CRGB twinkleColor = color;
-        twinkleColor.nscale8(brightness);
-        leds[pos] = twinkleColor;
+    for (uint8_t i = 0; i < numLeds; i++) {
+        // Create smooth gradient across the strip
+        uint8_t position = (i * 256 / numLeds + phase) % 256;
+        
+        // Vary brightness smoothly across the strip
+        uint8_t brightness = sin8(position);
+        brightness = map(brightness, 0, 255, 60, 255); // Minimum 60 brightness
+        
+        CRGB gradientColor = color;
+        gradientColor.nscale8(brightness);
+        leds[i] = gradientColor;
     }
 }
 
@@ -1944,25 +1983,31 @@ void effectWaveImproved(CRGB* leds, uint8_t numLeds, CRGB color, uint16_t step) 
 }
 
 // Improved Comet Effect with consistent timing
-void effectCometImproved(CRGB* leds, uint8_t numLeds, CRGB color, uint16_t step) {
-    // Fade all LEDs
+// PEV-Friendly: Improved Center Burst Effect with consistent timing
+void effectCenterBurstImproved(CRGB* leds, uint8_t numLeds, CRGB color, uint16_t step) {
+    // Use step for consistent timing across synced devices
+    uint8_t phase = (step * 3) % 256;
+    
+    // Use sine wave for smooth expansion/contraction
+    uint8_t expansion = sin8(phase);
+    uint8_t maxRadius = numLeds / 2;
+    uint8_t radius = map(expansion, 0, 255, 0, maxRadius);
+    
+    uint8_t center = numLeds / 2;
+    
     for (uint8_t i = 0; i < numLeds; i++) {
-        leds[i].nscale8(200); // Fade by 22%
-    }
-    
-    // Apply speed multiplier for faster movement
-    uint8_t multiplier = getEffectSpeedMultiplier(FX_COMET);
-    // Use step for consistent comet movement
-    uint8_t cometSize = 4 + (step % 4);
-    uint8_t cometPos = ((step * multiplier) / 3) % (numLeds + cometSize);
-    
-    // Draw comet with tail
-    for (uint8_t i = 0; i < cometSize; i++) {
-        if (cometPos - i >= 0 && cometPos - i < numLeds) {
-            uint8_t brightness = 255 - (i * 255 / cometSize);
-            CRGB cometColor = color;
-            cometColor.nscale8(brightness);
-            leds[cometPos - i] = cometColor;
+        uint8_t distance = abs((int)i - (int)center);
+        
+        if (distance <= radius) {
+            // Inside the burst - calculate brightness based on distance from edge
+            uint8_t edgeDistance = radius - distance;
+            uint8_t brightness = map(edgeDistance, 0, radius > 0 ? radius : 1, 100, 255);
+            CRGB burstColor = color;
+            burstColor.nscale8(brightness);
+            leds[i] = burstColor;
+        } else {
+            // Outside the burst
+            leds[i] = getEffectBackgroundColor();
         }
     }
 }
@@ -2161,17 +2206,23 @@ void effectRainbowWipeImproved(CRGB* leds, uint8_t numLeds, uint16_t step) {
 }
 
 // Improved Theater Chase Effect with consistent timing
-void effectTheaterChaseImproved(CRGB* leds, uint8_t numLeds, CRGB color, uint16_t step) {
-    // Apply speed multiplier for faster movement
-    uint8_t multiplier = getEffectSpeedMultiplier(FX_THEATER_CHASE);
-    // Use step for consistent chase pattern
-    uint8_t chaseStep = ((step * multiplier) / 2) % 3;
+// PEV-Friendly: Improved Hazard Effect with consistent timing
+void effectHazardImproved(CRGB* leds, uint8_t numLeds, CRGB color, uint16_t step) {
+    // Use step for consistent timing across synced devices
+    bool firstHalf = ((step / 15) % 2) == 0; // Toggle every ~15 steps
+    
+    uint8_t midPoint = numLeds / 2;
     
     for (uint8_t i = 0; i < numLeds; i++) {
-        if ((i + chaseStep) % 3 == 0) {
+        bool isFirstHalf = (i < midPoint);
+        
+        if ((isFirstHalf && firstHalf) || (!isFirstHalf && !firstHalf)) {
             leds[i] = color;
         } else {
-            leds[i] = getEffectBackgroundColor();
+            // Dim the other half instead of turning off completely
+            CRGB dimColor = color;
+            dimColor.nscale8(40); // 15% brightness
+            leds[i] = dimColor;
         }
     }
 }
@@ -3405,17 +3456,17 @@ void showParkEffect() {
             effectRainbowImproved(headlight, headlightLedCount, headlightTiming.step);
             effectRainbowImproved(taillight, taillightLedCount, taillightTiming.step);
             break;
-        case FX_CHASE:
-            effectChaseImproved(headlight, headlightLedCount, parkHeadlightColor, headlightTiming.step);
-            effectChaseImproved(taillight, taillightLedCount, parkTaillightColor, taillightTiming.step);
+        case FX_PULSE:
+            effectPulseImproved(headlight, headlightLedCount, parkHeadlightColor, headlightTiming.step);
+            effectPulseImproved(taillight, taillightLedCount, parkTaillightColor, taillightTiming.step);
             break;
         case FX_BLINK_RAINBOW:
             effectBlinkRainbowImproved(headlight, headlightLedCount, headlightTiming.step);
             effectBlinkRainbowImproved(taillight, taillightLedCount, taillightTiming.step);
             break;
-        case FX_TWINKLE:
-            effectTwinkleImproved(headlight, headlightLedCount, parkHeadlightColor, headlightTiming.step);
-            effectTwinkleImproved(taillight, taillightLedCount, parkTaillightColor, taillightTiming.step);
+        case FX_GRADIENT_SHIFT:
+            effectGradientShiftImproved(headlight, headlightLedCount, parkHeadlightColor, headlightTiming.step);
+            effectGradientShiftImproved(taillight, taillightLedCount, parkTaillightColor, taillightTiming.step);
             break;
         case FX_FIRE:
             effectFireImproved(headlight, headlightLedCount, headlightTiming.step);
@@ -3429,9 +3480,9 @@ void showParkEffect() {
             effectWaveImproved(headlight, headlightLedCount, parkHeadlightColor, headlightTiming.step);
             effectWaveImproved(taillight, taillightLedCount, parkTaillightColor, taillightTiming.step);
             break;
-        case FX_COMET:
-            effectCometImproved(headlight, headlightLedCount, parkHeadlightColor, headlightTiming.step);
-            effectCometImproved(taillight, taillightLedCount, parkTaillightColor, taillightTiming.step);
+        case FX_CENTER_BURST:
+            effectCenterBurstImproved(headlight, headlightLedCount, parkHeadlightColor, headlightTiming.step);
+            effectCenterBurstImproved(taillight, taillightLedCount, parkTaillightColor, taillightTiming.step);
             break;
         case FX_CANDLE:
             effectCandleImproved(headlight, headlightLedCount, headlightTiming.step);
@@ -3461,9 +3512,9 @@ void showParkEffect() {
             effectColorWipeImproved(headlight, headlightLedCount, parkHeadlightColor, headlightTiming.step);
             effectColorWipeImproved(taillight, taillightLedCount, parkTaillightColor, taillightTiming.step);
             break;
-        case FX_THEATER_CHASE:
-            effectTheaterChaseImproved(headlight, headlightLedCount, parkHeadlightColor, headlightTiming.step);
-            effectTheaterChaseImproved(taillight, taillightLedCount, parkTaillightColor, taillightTiming.step);
+        case FX_HAZARD:
+            effectHazardImproved(headlight, headlightLedCount, parkHeadlightColor, headlightTiming.step);
+            effectHazardImproved(taillight, taillightLedCount, parkTaillightColor, taillightTiming.step);
             break;
         case FX_RUNNING_LIGHTS:
             effectRunningLightsImproved(headlight, headlightLedCount, parkHeadlightColor, headlightTiming.step);
