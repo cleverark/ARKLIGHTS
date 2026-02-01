@@ -70,6 +70,7 @@ jobs:
       
       - name: Build firmware
         run: |
+          # Build the firmware
           pio run -e arklights_test
       
       - name: Prepare release artifacts

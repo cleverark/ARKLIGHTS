@@ -1,22 +1,45 @@
 {
-    "build": {
-      "core": "esp32",
-      "mcu": "esp32s3",
-      "variant": "xiao_esp32s3",
-      "f_cpu": "240000000L",
-      "f_flash": "80000000L",
-      "psram": "enabled"
+  "build": {
+    "arduino": {
+      "ldscript": "esp32s3_out.ld",
+      "partitions": "default_8MB.csv",
+      "memory_type": "qio_opi"
     },
-    "frameworks": ["arduino", "espidf"],
-    "name": "Seeed XIAO ESP32S3",
-    "upload": {
-      "maximum_size": 1310720,
-      "maximum_ram_size": 327680,
-      "flash_size": "4MB",
-      "require_upload_port": true
-    },
-    "connectivity": ["wifi", "bluetooth"],
-    "url": "https://wiki.seeedstudio.com/XIAO_ESP32S3_Getting_Started/",
-    "vendor": "Seeed Studios"
-  }
-  
+    "core": "esp32",
+    "extra_flags": [
+      "-DARDUINO_XIAO_ESP32S3",
+      "-DARDUINO_USB_MODE=1",
+      "-DARDUINO_RUNNING_CORE=1",
+      "-DARDUINO_EVENT_RUNNING_CORE=1"
+    ],
+    "f_cpu": "240000000L",
+    "f_flash": "80000000L",
+    "flash_mode": "qio",
+    "hwids": [
+      ["0x2886", "0x0056"]
+    ],
+    "mcu": "esp32s3",
+    "variant": "XIAO_ESP32S3"
+  },
+  "connectivity": [
+    "wifi",
+    "bluetooth"
+  ],
+  "debug": {
+    "openocd_target": "esp32s3.cfg"
+  },
+  "frameworks": [
+    "arduino",
+    "espidf"
+  ],
+  "name": "Seeed XIAO ESP32S3",
+  "upload": {
+    "flash_size": "8MB",
+    "maximum_ram_size": 327680,
+    "maximum_size": 8388608,
+    "require_upload_port": true,
+    "speed": 460800
+  },
+  "url": "https://wiki.seeedstudio.com/XIAO_ESP32S3_Getting_Started/",
+  "vendor": "Seeed Studio"
+}
