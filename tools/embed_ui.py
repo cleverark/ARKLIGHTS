@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Build script to embed web UI files into firmware.
+PlatformIO pre-build script to embed web UI files into firmware.
 Run automatically by PlatformIO before compilation.
 
 This script:
@@ -12,11 +12,17 @@ This script:
 
 import os
 import gzip
-import sys
+
+# PlatformIO integration
+Import("env")
+
+# Get project directory
+PROJECT_DIR = env.get("PROJECT_DIR", os.getcwd())
 
 # Paths relative to project root
-UI_DIR = "data/ui"
-OUTPUT_FILE = "include/embedded_ui.h"
+UI_DIR = os.path.join(PROJECT_DIR, "data", "ui")
+INCLUDE_DIR = os.path.join(PROJECT_DIR, "include")
+OUTPUT_FILE = os.path.join(INCLUDE_DIR, "embedded_ui.h")
 
 # Files to embed (in order)
 UI_FILES = [
@@ -25,11 +31,11 @@ UI_FILES = [
     ("script.js", "application/javascript"),
 ]
 
-def gzip_content(content: bytes) -> bytes:
+def gzip_content(content):
     """Gzip compress content."""
     return gzip.compress(content, compresslevel=9)
 
-def bytes_to_c_array(data: bytes, var_name: str) -> str:
+def bytes_to_c_array(data, var_name):
     """Convert bytes to C array declaration."""
     lines = []
     lines.append(f"const uint8_t {var_name}[] PROGMEM = {{")
@@ -49,7 +55,7 @@ def generate_header():
     
     # Check if UI directory exists
     if not os.path.isdir(UI_DIR):
-        print(f"Warning: {UI_DIR} directory not found, using fallback UI")
+        print(f"[embed_ui] Warning: {UI_DIR} directory not found, using fallback UI")
         return generate_fallback_header()
     
     header_parts = [
@@ -66,7 +72,7 @@ def generate_header():
         filepath = os.path.join(UI_DIR, filename)
         
         if not os.path.isfile(filepath):
-            print(f"Warning: {filepath} not found, skipping")
+            print(f"[embed_ui] Warning: {filepath} not found, skipping")
             continue
         
         # Read and compress
@@ -78,7 +84,7 @@ def generate_header():
         # Generate variable name
         var_name = filename.replace('.', '_').replace('-', '_').upper() + "_GZ"
         
-        print(f"  {filename}: {len(original)} bytes -> {len(compressed)} bytes (gzipped)")
+        print(f"[embed_ui] {filename}: {len(original)} bytes -> {len(compressed)} bytes (gzipped)")
         
         # Generate C array
         header_parts.append(f"// {filename} - {len(original)} bytes original, {len(compressed)} bytes gzipped")
@@ -103,7 +109,7 @@ def generate_header():
     header_parts.append("};")
     header_parts.append("")
     
-    header_parts.append(f"const EmbeddedFile EMBEDDED_FILES[] = {{")
+    header_parts.append("const EmbeddedFile EMBEDDED_FILES[] = {")
     for info in file_info:
         header_parts.append(f'    {{"{info["filename"]}", "{info["content_type"]}", {info["var_name"]}, {info["var_name"]}_len}},')
     header_parts.append("};")
@@ -145,22 +151,27 @@ inline const EmbeddedFile* findEmbeddedFile(const char* filename) {
 }
 """
 
-def main():
-    print("Embedding UI files into firmware...")
+def embed_ui_files(source, target, env):
+    """PlatformIO build callback to embed UI files."""
+    print("[embed_ui] Embedding UI files into firmware...")
     
     # Ensure include directory exists
-    os.makedirs("include", exist_ok=True)
+    os.makedirs(INCLUDE_DIR, exist_ok=True)
     
     header_content = generate_header()
     
     with open(OUTPUT_FILE, 'w') as f:
         f.write(header_content)
     
-    print(f"Generated {OUTPUT_FILE}")
+    print(f"[embed_ui] Generated {OUTPUT_FILE}")
 
-if __name__ == "__main__":
-    # Change to project root if running from tools/
-    if os.path.basename(os.getcwd()) == "tools":
-        os.chdir("..")
-    
-    main()
+# Register the pre-build action
+env.AddPreAction("buildprog", embed_ui_files)
+
+# Also run immediately for the first build
+print("[embed_ui] Running pre-build UI embedding...")
+os.makedirs(INCLUDE_DIR, exist_ok=True)
+header_content = generate_header()
+with open(OUTPUT_FILE, 'w') as f:
+    f.write(header_content)
+print(f"[embed_ui] Generated {OUTPUT_FILE}")
