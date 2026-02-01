@@ -1,16 +1,19 @@
-    name: Notify Discord on PR Merge
-    on:
-      pull_request:
-        types: [closed]
+name: Notify Discord on PR Merge
 
-    jobs:
-      notify:
-        runs-on: ubuntu-latest
-        steps:
-        - name: Send Discord notification
-          shell: bash
-          env:
-            DISCORD_WEBHOOK_BETA_TESTERS: ${{ secrets.DISCORD_WEBHOOK_BETA_TESTERS }}
-          if: github.event.pull_request.merged == true
-          run: |
-            curl -H "Content-Type: application/json" -d '{"content": "Pull Request #{{ github.event.pull_request.number }} merged by {{ github.actor }}"}' $DISCORD_WEBHOOK_BETA_TESTERS
+on:
+  pull_request:
+    types: [closed]
+
+jobs:
+  notify:
+    runs-on: ubuntu-latest
+    if: github.event.pull_request.merged == true
+    steps:
+      - name: Send Discord notification
+        shell: bash
+        env:
+          DISCORD_WEBHOOK_BETA_TESTERS: ${{ secrets.DISCORD_WEBHOOK_BETA_TESTERS }}
+        run: |
+          curl -H "Content-Type: application/json" \
+            -d "{\"content\": \"🎉 **ArkLights** PR #${{ github.event.pull_request.number }} merged by ${{ github.actor }}\\n${{ github.event.pull_request.title }}\"}" \
+            $DISCORD_WEBHOOK_BETA_TESTERS
