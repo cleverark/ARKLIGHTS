@@ -1,28 +1,202 @@
-name: Release
+name: Release Firmware
 
 on:
+  # Manual trigger with version input
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version number (e.g., 8.1.0)'
+        required: true
+        type: string
+      release_notes:
+        description: 'Release notes (what changed)'
+        required: false
+        type: string
+        default: ''
+      prerelease:
+        description: 'Mark as pre-release'
+        required: false
+        type: boolean
+        default: false
+  
+  # Auto-release on version tags
   push:
-    branches:
-      - main
-      - dev
+    tags:
+      - 'v*.*.*'
+
+env:
+  FIRMWARE_NAME: arklights
 
 jobs:
-  release:
-    name: Semantic Release
+  build-firmware:
+    name: Build Firmware
     runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    
     steps:
-      - name: Checkout repo
+      - name: Checkout code
         uses: actions/checkout@v4
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
+      
+      - name: Determine version
+        id: version
+        run: |
+          if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
+            VERSION="${{ github.event.inputs.version }}"
+          else
+            # Extract version from tag (remove 'v' prefix)
+            VERSION="${GITHUB_REF_NAME#v}"
+          fi
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "Building version: $VERSION"
+      
+      - name: Set up Python
+        uses: actions/setup-python@v5
         with:
-          node-version: 18
+          python-version: '3.12'
+          cache: 'pip'
+      
+      - name: Install PlatformIO
+        run: |
+          pip install platformio
+      
+      - name: Update version in firmware
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          # Update version in main.cpp if there's a version string
+          if grep -q 'firmware_version' src/main.cpp; then
+            sed -i "s/v[0-9]*\.[0-9]*[^\"']*/v$VERSION/g" src/main.cpp || true
+          fi
+      
+      - name: Build firmware
+        run: |
+          pio run -e arklights_test
+      
+      - name: Prepare release artifacts
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          mkdir -p release
+          
+          # Find and copy the built firmware
+          find .pio/build -name "*.bin" -type f | head -1 | xargs -I {} cp {} release/${FIRMWARE_NAME}-v${VERSION}.bin
+          
+          # Get file size
+          FILE_SIZE=$(stat -c%s "release/${FIRMWARE_NAME}-v${VERSION}.bin" 2>/dev/null || stat -f%z "release/${FIRMWARE_NAME}-v${VERSION}.bin")
+          
+          # Create manifest.json for Android app OTA
+          cat > release/manifest.json << EOF
+          {
+            "latest_version": "$VERSION",
+            "download_url": "https://github.com/${{ github.repository }}/releases/download/v${VERSION}/${FIRMWARE_NAME}-v${VERSION}.bin",
+            "file_size": $FILE_SIZE,
+            "release_notes": "${{ github.event.inputs.release_notes || 'Bug fixes and improvements' }}",
+            "min_app_version": "1.0.0",
+            "build_date": "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          }
+          EOF
+          
+          echo "📦 Release artifacts:"
+          ls -la release/
+      
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: firmware-release
+          path: release/
+          retention-days: 30
 
-      - name: Install dependencies
-        run: npm ci
+  create-release:
+    name: Create GitHub Release
+    runs-on: ubuntu-latest
+    needs: build-firmware
+    permissions:
+      contents: write
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: firmware-release
+          path: release/
+      
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ needs.build-firmware.outputs.version }}
+          name: ArkLights v${{ needs.build-firmware.outputs.version }}
+          body: |
+            ## ArkLights Firmware v${{ needs.build-firmware.outputs.version }}
+            
+            ${{ github.event.inputs.release_notes || '### Changes\n- Bug fixes and improvements' }}
+            
+            ### Installation
+            
+            **Via Android App (Recommended):**
+            1. Open the ArkLights app
+            2. Go to Settings → Firmware Update
+            3. Tap "Check for Updates"
+            4. Follow the prompts to download and install
+            
+            **Manual Installation:**
+            1. Download `${{ env.FIRMWARE_NAME }}-v${{ needs.build-firmware.outputs.version }}.bin`
+            2. Connect to your device's WiFi (ARKLIGHTS-AP)
+            3. Go to `http://192.168.4.1` in your browser
+            4. Navigate to Settings → OTA Updates
+            5. Upload the .bin file
+            
+            ### Files
+            - `${{ env.FIRMWARE_NAME }}-v${{ needs.build-firmware.outputs.version }}.bin` - Firmware binary
+            - `manifest.json` - For Android app auto-updates
+          draft: false
+          prerelease: ${{ github.event.inputs.prerelease || false }}
+          files: |
+            release/${{ env.FIRMWARE_NAME }}-v${{ needs.build-firmware.outputs.version }}.bin
+            release/manifest.json
+          generate_release_notes: true
 
-      - name: Run semantic-release
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: npx semantic-release
+  update-manifest:
+    name: Update Latest Manifest
+    runs-on: ubuntu-latest
+    needs: [build-firmware, create-release]
+    permissions:
+      contents: write
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          ref: main
+      
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: firmware-release
+          path: release/
+      
+      - name: Update manifest in repo
+        run: |
+          # Create firmware directory if it doesn't exist
+          mkdir -p firmware
+          
+          # Copy manifest to firmware directory
+          cp release/manifest.json firmware/manifest.json
+          
+          echo "📋 Updated firmware/manifest.json:"
+          cat firmware/manifest.json
+      
+      - name: Commit manifest update
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          
+          git add firmware/manifest.json
+          
+          if git diff --staged --quiet; then
+            echo "No changes to commit"
+          else
+            git commit -m "chore: update firmware manifest to v${{ needs.build-firmware.outputs.version }}"
+            git push
+          fi

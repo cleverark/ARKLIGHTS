@@ -7,6 +7,9 @@
 </head>
 <body>
     <div class="container">
+        <div class="branding">
+            <img class="branding-arklights" src="assets/arklights-logo.png" alt="ArkLights Logo">
+        </div>
         <h1>ArkLights PEV Control v8.0 OTA - Test</h1>
         <div style="text-align: center; margin: 10px 0; padding: 10px; background: rgba(255,255,255,0.1); border-radius: 8px;">
             <strong>Firmware Version:</strong> v8.0 OTA | <strong>Build Date:</strong> <span id="buildDate">Loading...</span>
@@ -15,6 +18,7 @@
         <!-- Navigation Tabs -->
         <div class="nav-tabs">
             <button class="nav-tab active" onclick="showPage('main')">Main Controls</button>
+            <button class="nav-tab" onclick="showPage('group')">Group Sync</button>
             <button class="nav-tab" onclick="showPage('settings')">Settings</button>
         </div>
         
@@ -22,10 +26,11 @@
         <div id="mainPage" class="page-content">
             <div class="section">
                 <h2>Presets</h2>
-                <button class="preset-btn" onclick="setPreset(0)">Standard</button>
-                <button class="preset-btn" onclick="setPreset(1)">Night</button>
-                <button class="preset-btn" onclick="setPreset(2)">Party</button>
-                <button class="preset-btn" onclick="setPreset(3)">Stealth</button>
+                <div id="presetsList" style="display: grid; gap: 6px;"></div>
+                <div style="margin-top: 10px;">
+                    <button onclick="saveCustomPreset()" class="btn btn-secondary">Save Current as Preset</button>
+                </div>
+                <small>Presets are stored on the device and shared with apps</small>
             </div>
             
             <div class="section">
@@ -35,29 +40,55 @@
                     <input type="color" id="headlightColor" value="#ffffff" onchange="setHeadlightColor(this.value)">
                 </div>
                 <div class="control-group">
+                    <label>
+                        <input type="checkbox" id="headlightBackgroundEnabled" onchange="setHeadlightBackgroundEnabled(this.checked)">
+                        Use Background Color
+                    </label>
+                </div>
+                <div class="control-group">
+                    <label>Background Color:</label>
+                    <input type="color" id="headlightBackgroundColor" value="#000000" onchange="setHeadlightBackgroundColor(this.value)">
+                </div>
+                <div class="control-group">
                     <label>Effect:</label>
                     <select id="headlightEffect" onchange="setHeadlightEffect(this.value)">
-                        <option value="0">Solid</option>
-                        <option value="1">Breath</option>
-                        <option value="2">Rainbow</option>
-                        <option value="3">Chase</option>
-                        <option value="4">Blink Rainbow</option>
-                        <option value="5">Twinkle</option>
-                        <option value="6">Fire</option>
-                        <option value="7">Meteor</option>
-                        <option value="8">Wave</option>
-                        <option value="9">Comet</option>
-                        <option value="10">Candle</option>
-                        <option value="11">Static Rainbow</option>
-                        <option value="12">Knight Rider</option>
-                        <option value="13">Police</option>
-                        <option value="14">Strobe</option>
-                        <option value="15">Larson Scanner</option>
-                        <option value="16">Color Wipe</option>
-                        <option value="17">Theater Chase</option>
-                        <option value="18">Running Lights</option>
-                        <option value="19">Color Sweep</option>
+                        <optgroup label="Popular">
+                            <option value="0">Solid</option>
+                            <option value="1">Breath</option>
+                            <option value="2">Rainbow</option>
+                            <option value="8">Wave</option>
+                            <option value="16">Color Wipe</option>
+                            <option value="23">Rainbow Wipe</option>
+                            <option value="12">Knight Rider</option>
+                        </optgroup>
+                        <optgroup label="Other effects">
+                            <option value="3">Chase</option>
+                            <option value="4">Blink Rainbow</option>
+                            <option value="5">Twinkle</option>
+                            <option value="6">Fire</option>
+                            <option value="7">Meteor</option>
+                            <option value="9">Comet</option>
+                            <option value="10">Candle</option>
+                            <option value="11">Static Rainbow</option>
+                            <option value="13">Police</option>
+                            <option value="14">Strobe</option>
+                            <option value="15">Larson Scanner</option>
+                            <option value="17">Theater Chase</option>
+                            <option value="18">Running Lights</option>
+                            <option value="19">Color Sweep</option>
+                            <option value="20">Rainbow Knight Rider</option>
+                            <option value="21">Dual Knight Rider</option>
+                            <option value="22">Dual Rainbow Knight Rider</option>
+                        </optgroup>
                     </select>
+                </div>
+                <div class="control-group">
+                    <label>Headlight Mode:</label>
+                    <select id="headlightMode" onchange="setHeadlightMode(this.value)">
+                        <option value="0">Solid White</option>
+                        <option value="1">Headlight Effect</option>
+                    </select>
+                    <small>Choose if headlight stays white or runs the selected effect</small>
                 </div>
             </div>
             
@@ -68,28 +99,46 @@
                     <input type="color" id="taillightColor" value="#ff0000" onchange="setTaillightColor(this.value)">
                 </div>
                 <div class="control-group">
+                    <label>
+                        <input type="checkbox" id="taillightBackgroundEnabled" onchange="setTaillightBackgroundEnabled(this.checked)">
+                        Use Background Color
+                    </label>
+                </div>
+                <div class="control-group">
+                    <label>Background Color:</label>
+                    <input type="color" id="taillightBackgroundColor" value="#000000" onchange="setTaillightBackgroundColor(this.value)">
+                </div>
+                <div class="control-group">
                     <label>Effect:</label>
                     <select id="taillightEffect" onchange="setTaillightEffect(this.value)">
-                        <option value="0">Solid</option>
-                        <option value="1">Breath</option>
-                        <option value="2">Rainbow</option>
-                        <option value="3">Chase</option>
-                        <option value="4">Blink Rainbow</option>
-                        <option value="5">Twinkle</option>
-                        <option value="6">Fire</option>
-                        <option value="7">Meteor</option>
-                        <option value="8">Wave</option>
-                        <option value="9">Comet</option>
-                        <option value="10">Candle</option>
-                        <option value="11">Static Rainbow</option>
-                        <option value="12">Knight Rider</option>
-                        <option value="13">Police</option>
-                        <option value="14">Strobe</option>
-                        <option value="15">Larson Scanner</option>
-                        <option value="16">Color Wipe</option>
-                        <option value="17">Theater Chase</option>
-                        <option value="18">Running Lights</option>
-                        <option value="19">Color Sweep</option>
+                        <optgroup label="Popular">
+                            <option value="0">Solid</option>
+                            <option value="1">Breath</option>
+                            <option value="2">Rainbow</option>
+                            <option value="8">Wave</option>
+                            <option value="16">Color Wipe</option>
+                            <option value="23">Rainbow Wipe</option>
+                            <option value="12">Knight Rider</option>
+                        </optgroup>
+                        <optgroup label="Other effects">
+                            <option value="3">Chase</option>
+                            <option value="4">Blink Rainbow</option>
+                            <option value="5">Twinkle</option>
+                            <option value="6">Fire</option>
+                            <option value="7">Meteor</option>
+                            <option value="9">Comet</option>
+                            <option value="10">Candle</option>
+                            <option value="11">Static Rainbow</option>
+                            <option value="13">Police</option>
+                            <option value="14">Strobe</option>
+                            <option value="15">Larson Scanner</option>
+                            <option value="17">Theater Chase</option>
+                            <option value="18">Running Lights</option>
+                            <option value="19">Color Sweep</option>
+                            <option value="20">Rainbow Knight Rider</option>
+                            <option value="21">Dual Knight Rider</option>
+                            <option value="22">Dual Rainbow Knight Rider</option>
+                        </optgroup>
                     </select>
                 </div>
             </div>
@@ -121,7 +170,8 @@
                     </label>
                     <small>Master switch for all motion features</small>
                 </div>
-                
+
+                <h3>Direction Detection</h3>
                 <div class="control-group">
                     <label>
                         <input type="checkbox" id="directionBasedLighting" onchange="setDirectionBasedLighting(this.checked)">
@@ -131,19 +181,13 @@
                 </div>
                 
                 <div class="control-group" id="directionSettings" style="display: none; margin-left: 20px;">
-                    <label>Headlight Mode:</label>
-                    <select id="headlightMode" onchange="setHeadlightMode(this.value)">
-                        <option value="0">Solid White</option>
-                        <option value="1">Headlight Effect</option>
-                    </select>
-                    <small>Choose if headlight is always white or runs selected effect</small>
-                    
-                    <label style="margin-top: 10px;">Direction Threshold: <span id="forwardAccelThresholdValue">0.3</span>G</label>
+                    <label>Direction Threshold: <span id="forwardAccelThresholdValue">0.3</span>G</label>
                     <input type="range" id="forwardAccelThreshold" min="0.1" max="1.0" step="0.1" 
                            oninput="setForwardAccelThreshold(this.value)">
                     <small>Acceleration threshold for direction change detection</small>
                 </div>
                 
+                <h3>Safety Features</h3>
                 <div class="control-group">
                     <label>
                         <input type="checkbox" id="blinkerEnabled" onchange="setBlinkerEnabled(this.checked)">
@@ -154,18 +198,67 @@
                 
                 <div class="control-group">
                     <label>
-                        <input type="checkbox" id="parkModeEnabled" onchange="setParkModeEnabled(this.checked)">
-                        Park Mode
-                    </label>
-                    <small>Special effects when stationary and tilted</small>
-                </div>
-                
-                <div class="control-group">
-                    <label>
                         <input type="checkbox" id="impactDetectionEnabled" onchange="setImpactDetectionEnabled(this.checked)">
                         Impact Detection
                     </label>
                     <small>Flash lights on sudden acceleration changes</small>
+                </div>
+                
+                <div class="control-group">
+                    <label>
+                        <input type="checkbox" id="brakingEnabled" onchange="setBrakingEnabled(this.checked)">
+                        Braking Detection
+                    </label>
+                    <small>Automatically detect braking and adjust taillight</small>
+                </div>
+                
+                <div class="control-group" id="brakingSettings" style="display: none; margin-left: 20px;">
+                    <label>Braking Effect:</label>
+                    <select id="brakingEffect" onchange="setBrakingEffect(this.value)">
+                        <option value="0">Flash Red (3x then solid)</option>
+                        <option value="1">Pulse from Center (3x then solid)</option>
+                    </select>
+                    <small>Effect shown when braking is detected</small>
+                    
+                    <label style="margin-top: 10px;">Braking Threshold: <span id="brakingThresholdValue">-0.5</span>G</label>
+                    <input type="range" id="brakingThreshold" min="-2.0" max="-0.1" step="0.1" 
+                           oninput="setBrakingThreshold(this.value)">
+                    <small>Deceleration threshold to trigger braking effect (negative = deceleration)</small>
+                    
+                    <label style="margin-top: 10px;">Braking Brightness: <span id="brakingBrightnessValue">255</span></label>
+                    <input type="range" id="brakingBrightness" min="128" max="255" value="255" 
+                           oninput="setBrakingBrightness(this.value)">
+                    <small>Brightness of braking effect</small>
+                </div>
+
+                <div class="control-group">
+                    <h4 style="margin: 10px 0 6px;">Manual Signals</h4>
+                    <div style="display: flex; flex-wrap: wrap; gap: 8px;">
+                        <button onclick="setManualBlinker('left')" class="btn btn-secondary">Left Blinker</button>
+                        <button onclick="setManualBlinker('right')" class="btn btn-secondary">Right Blinker</button>
+                        <button onclick="setManualBlinker('off')" class="btn btn-danger">Blinker Off</button>
+                        <button onclick="setManualBrake(true)" class="btn btn-warning">Brake On</button>
+                        <button onclick="setManualBrake(false)" class="btn btn-secondary">Brake Off</button>
+                    </div>
+                    <small>Manual overrides for testing or remote triggers</small>
+                </div>
+                
+                <h3>Park Mode</h3>
+                <div class="control-group">
+                    <label>
+                        <input type="checkbox" id="parkModeEnabled" onchange="setParkModeEnabled(this.checked)">
+                        Park Mode
+                    </label>
+                    <small>Special effects when stationary and tilted (configure in Settings)</small>
+                </div>
+
+                <h3>Advanced</h3>
+                <div class="control-group">
+                    <label>
+                        <input type="checkbox" id="whiteLEDsEnabled" onchange="setWhiteLEDsEnabled(this.checked)">
+                        White LEDs (Dedicated)
+                    </label>
+                    <small>Control dedicated white LEDs via MOSFET</small>
                 </div>
                 
                 <div class="control-group">
@@ -183,6 +276,92 @@
             </div>
         </div>
         
+        <!-- Group Sync Page -->
+        <div id="groupPage" class="page-content" style="display: none;">
+            <div class="section">
+                <h2>🚴 Group Ride Sync</h2>
+                <p style="margin-top: 5px; color: #bbb;">Sync headlight/taillight effects and speed with a group leader.</p>
+            </div>
+            <div class="section">
+                <h2>📡 ESPNow Sync</h2>
+                <div class="control-group">
+                    <label>
+                        <input type="checkbox" id="enableESPNow" onchange="setESPNowEnabled(this.checked)">
+                        Enable ESPNow
+                    </label>
+                    <small>Enable device-to-device sync for group rides</small>
+                </div>
+                <div class="control-group">
+                    <label>
+                        <input type="checkbox" id="useESPNowSync" onchange="setESPNowSync(this.checked)">
+                        Enable Effect Sync
+                    </label>
+                    <small>Sync effects with the group master (motion effects remain local)</small>
+                </div>
+                <details class="control-group">
+                    <summary>Advanced ESPNow Settings</summary>
+                    <div style="margin-top: 10px;">
+                        <label>ESPNow Channel: <span id="espNowChannelValue">1</span></label>
+                        <input type="range" id="espNowChannel" min="1" max="14" value="1" oninput="setESPNowChannel(this.value)">
+                        <small>All devices must use the same channel</small>
+                    </div>
+                </details>
+                <div class="control-group">
+                    <div id="espNowStatus" style="padding: 10px; background: #333; border-radius: 5px; margin: 10px 0; color: #fff;">
+                        <strong>ESPNow Status:</strong> <span id="espNowStatusText">Initializing...</span><br>
+                        <strong>Peers:</strong> <span id="espNowPeerCount">0</span><br>
+                        <strong>Last Send:</strong> <span id="espNowLastSend">Never</span>
+                    </div>
+                </div>
+            </div>
+            
+            <div class="section">
+                <h2>Group Ride Management</h2>
+                <div class="control-group">
+                    <label>Device Name:</label>
+                    <input type="text" id="deviceName" placeholder="Enter device name" maxlength="20" onchange="setDeviceName(this.value)">
+                    <small>Name shown to other group members</small>
+                </div>
+                
+                <div class="control-group">
+                    <div id="groupStatus" style="padding: 10px; background: #333; border-radius: 5px; margin: 10px 0; color: #fff;">
+                        <strong>Group Status:</strong> <span id="groupStatusText">Not in group</span><br>
+                        <strong>Group Code:</strong> <span id="groupCodeText">None</span><br>
+                        <strong>Role:</strong> <span id="groupRoleText">None</span><br>
+                        <strong>Members:</strong> <span id="groupMemberCount">0</span>
+                    </div>
+                </div>
+                
+                <div class="control-group">
+                    <label>Group Code (optional):</label>
+                    <input type="text" id="groupCodeInput" placeholder="6-digit code for join" maxlength="6" pattern="[0-9]{6}">
+                    <div style="margin-top: 10px;">
+                        <button onclick="createGroup()" class="btn btn-primary">Create Group</button>
+                        <button onclick="scanJoinGroup()" class="btn btn-secondary">Scan & Join</button>
+                        <button onclick="joinGroup()" class="btn btn-secondary">Join by Code</button>
+                        <button onclick="leaveGroup()" class="btn btn-danger">Leave Group</button>
+                    </div>
+                    <small>Create generates a code automatically. Scan joins the first group it sees.</small>
+                </div>
+                
+                <div class="control-group" id="masterControls" style="display: none;">
+                    <h3>Join Controls (optional)</h3>
+                    <div style="margin: 10px 0;">
+                        <button onclick="allowGroupJoin()" class="btn btn-success">Allow Joins</button>
+                        <button onclick="blockGroupJoin()" class="btn btn-warning">Block Joins</button>
+                    </div>
+                    <small>Joins are allowed by default</small>
+                </div>
+                
+                <div class="control-group">
+                    <div id="groupMembers" style="padding: 10px; background: #333; border-radius: 5px; margin: 10px 0; color: #fff;">
+                        <strong>Group Members:</strong>
+                        <div id="groupMembersList">No members</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
         <!-- Settings Page -->
         <div id="settingsPage" class="page-content" style="display: none;">
             <!-- Calibration Section -->
@@ -309,9 +488,13 @@
                     <option value="14">Strobe</option>
                     <option value="15">Larson Scanner</option>
                     <option value="16">Color Wipe</option>
+                    <option value="23">Rainbow Wipe</option>
                     <option value="17">Theater Chase</option>
                     <option value="18">Running Lights</option>
                     <option value="19">Color Sweep</option>
+                    <option value="20">Rainbow Knight Rider</option>
+                    <option value="21">Dual Knight Rider</option>
+                    <option value="22">Dual Rainbow Knight Rider</option>
                 </select>
                 <small>Effect to display when in park mode</small>
             </div>
@@ -413,81 +596,6 @@
         
         
             <div class="section">
-                <h2>📡 ESPNow Configuration</h2>
-                <div class="control-group">
-                    <label>
-                        <input type="checkbox" id="enableESPNow" onchange="setESPNowEnabled(this.checked)">
-                        Enable ESPNow
-                    </label>
-                    <small>Enable mesh networking between ArkLights devices</small>
-                </div>
-                <div class="control-group">
-                    <label>
-                        <input type="checkbox" id="useESPNowSync" onchange="setESPNowSync(this.checked)">
-                        Enable Effect Sync
-                    </label>
-                    <small>Synchronize LED effects with other devices (motion effects remain local)</small>
-                </div>
-                <div class="control-group">
-                    <label>ESPNow Channel: <span id="espNowChannelValue">1</span></label>
-                    <input type="range" id="espNowChannel" min="1" max="14" value="1" oninput="setESPNowChannel(this.value)">
-                    <small>WiFi channel for ESPNow communication (1-14)</small>
-                </div>
-                <div class="control-group">
-                    <div id="espNowStatus" style="padding: 10px; background: #333; border-radius: 5px; margin: 10px 0; color: #fff;">
-                        <strong>ESPNow Status:</strong> <span id="espNowStatusText">Initializing...</span><br>
-                        <strong>Peers:</strong> <span id="espNowPeerCount">0</span><br>
-                        <strong>Last Send:</strong> <span id="espNowLastSend">Never</span>
-                    </div>
-                </div>
-            </div>
-            
-            <div class="section">
-                <h2>🚴 Group Ride Management</h2>
-                <div class="control-group">
-                    <label>Device Name:</label>
-                    <input type="text" id="deviceName" placeholder="Enter device name" maxlength="20" onchange="setDeviceName(this.value)">
-                    <small>Name shown to other group members</small>
-                </div>
-                
-                <div class="control-group">
-                    <div id="groupStatus" style="padding: 10px; background: #333; border-radius: 5px; margin: 10px 0; color: #fff;">
-                        <strong>Group Status:</strong> <span id="groupStatusText">Not in group</span><br>
-                        <strong>Group Code:</strong> <span id="groupCodeText">None</span><br>
-                        <strong>Role:</strong> <span id="groupRoleText">None</span><br>
-                        <strong>Members:</strong> <span id="groupMemberCount">0</span>
-                    </div>
-                </div>
-                
-                <div class="control-group">
-                    <label>Group Code:</label>
-                    <input type="text" id="groupCodeInput" placeholder="Enter 6-digit code" maxlength="6" pattern="[0-9]{6}">
-                    <div style="margin-top: 10px;">
-                        <button onclick="createGroup()" class="btn btn-primary">Create Group</button>
-                        <button onclick="joinGroup()" class="btn btn-secondary">Join Group</button>
-                        <button onclick="leaveGroup()" class="btn btn-danger">Leave Group</button>
-                    </div>
-                    <small>Create a new group or join an existing one with a 6-digit code</small>
-                </div>
-                
-                <div class="control-group" id="masterControls" style="display: none;">
-                    <h3>Master Controls</h3>
-                    <div style="margin: 10px 0;">
-                        <button onclick="allowGroupJoin()" class="btn btn-success">Allow New Members</button>
-                        <button onclick="blockGroupJoin()" class="btn btn-warning">Block New Members</button>
-                    </div>
-                    <small>Control who can join your group</small>
-                </div>
-                
-                <div class="control-group">
-                    <div id="groupMembers" style="padding: 10px; background: #333; border-radius: 5px; margin: 10px 0; color: #fff;">
-                        <strong>Group Members:</strong>
-                        <div id="groupMembersList">No members</div>
-                    </div>
-                </div>
-            </div>
-            
-            <div class="section">
                 <h2>LED Configuration</h2>
             <div class="control-group">
                 <label>Headlight LED Count:</label>
@@ -536,6 +644,23 @@
             <div class="control-group">
                 <button onclick="testLEDs()" style="background: #ff9800;">Test LEDs (Red→Green→Blue→White)</button>
                 <button onclick="saveLEDConfig()" style="background: #4CAF50;">Save Configuration</button>
+                <button onclick="viewSettings()" style="background: #2196F3;">View Configuration</button>
+            </div>
+        </div>
+        
+            <div class="section" style="background: rgba(244, 67, 54, 0.1); border: 1px solid rgba(244, 67, 54, 0.3);">
+                <h2>Restore Defaults</h2>
+                <p>Reset all settings to stock. AP/BLE name will be unique (ARKLIGHTS-XXXXXX). Password stays default. Device will restart.</p>
+                <button onclick="restoreDefaults()" class="btn btn-danger">Restore to Stock</button>
+            </div>
+        
+        <!-- Settings Viewer Modal -->
+        <div id="settingsModal" style="display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.8); z-index: 1000; overflow: auto;">
+            <div style="background: #2a2a2a; margin: 50px auto; padding: 20px; border-radius: 8px; max-width: 800px; color: #fff;">
+                <h2 style="margin-top: 0;">Configuration File</h2>
+                <pre id="settingsContent" style="background: #1a1a1a; padding: 15px; border-radius: 4px; overflow-x: auto; white-space: pre-wrap; word-wrap: break-word; max-height: 70vh; overflow-y: auto; font-family: monospace; font-size: 12px;"></pre>
+                <button onclick="closeSettingsModal()" style="background: #f44336; color: white; padding: 10px 20px; border: none; border-radius: 4px; cursor: pointer; margin-top: 10px;">Close</button>
+                <button onclick="copySettings()" style="background: #4CAF50; color: white; padding: 10px 20px; border: none; border-radius: 4px; cursor: pointer; margin-top: 10px; margin-left: 10px;">Copy to Clipboard</button>
             </div>
         </div>
         </div>

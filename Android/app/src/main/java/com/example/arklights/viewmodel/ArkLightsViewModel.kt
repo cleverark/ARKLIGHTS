@@ -1,5 +1,7 @@
 package com.example.arklights.viewmodel
 
+import android.bluetooth.BluetoothDevice
+import android.content.Context
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.arklights.api.ArkLightsApiService
@@ -7,18 +9,24 @@ import com.example.arklights.bluetooth.BluetoothService
 import com.example.arklights.data.*
 import com.example.arklights.data.ConnectionState
 import kotlinx.coroutines.flow.*
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
-import android.bluetooth.BluetoothDevice
 
 class ArkLightsViewModel(
     private val bluetoothService: BluetoothService,
-    private val apiService: ArkLightsApiService
+    private val apiService: ArkLightsApiService,
+    private val deviceStore: DeviceStore
 ) : ViewModel() {
     
     // Connection state
     val connectionState = bluetoothService.connectionState
     val discoveredDevices = bluetoothService.discoveredDevices
     val errorMessage = bluetoothService.errorMessage
+
+    val savedDevices: StateFlow<List<SavedDevice>> = deviceStore.savedDevices
+        .stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
+    val lastDeviceAddress: StateFlow<String?> = deviceStore.lastDeviceAddress
+        .stateIn(viewModelScope, SharingStarted.Eagerly, null)
     
     // API state
     val isLoading = apiService.isLoading
@@ -27,6 +35,9 @@ class ArkLightsViewModel(
     // Device status
     private val _deviceStatus = MutableStateFlow<LEDStatus?>(null)
     val deviceStatus: StateFlow<LEDStatus?> = _deviceStatus.asStateFlow()
+    private var cachedPresets: List<PresetInfo> = emptyList()
+    private var calibrationRefreshJob: Job? = null
+    private var calibrationForcedUntilMs: Long = 0
     
     // UI state
     private val _currentPage = MutableStateFlow("main")
@@ -35,11 +46,50 @@ class ArkLightsViewModel(
     private val _selectedDevice = MutableStateFlow<BluetoothDevice?>(null)
     val selectedDevice: StateFlow<BluetoothDevice?> = _selectedDevice.asStateFlow()
     
+    // OTA Update state
+    private val _otaFileName = MutableStateFlow<String?>(null)
+    val otaFileName: StateFlow<String?> = _otaFileName.asStateFlow()
+    
+    private val _otaFileBytes = MutableStateFlow<ByteArray?>(null)
+    
+    private val _otaUploading = MutableStateFlow(false)
+    val otaUploading: StateFlow<Boolean> = _otaUploading.asStateFlow()
+    
+    private val _otaProgress = MutableStateFlow(0)
+    val otaProgress: StateFlow<Int> = _otaProgress.asStateFlow()
+    
+    private val _otaStatus = MutableStateFlow("Ready")
+    val otaStatus: StateFlow<String> = _otaStatus.asStateFlow()
+    
+    // Firmware update availability
+    private val _updateAvailable = MutableStateFlow<FirmwareManifest?>(null)
+    val updateAvailable: StateFlow<FirmwareManifest?> = _updateAvailable.asStateFlow()
+    
+    private val _isCheckingForUpdates = MutableStateFlow(false)
+    val isCheckingForUpdates: StateFlow<Boolean> = _isCheckingForUpdates.asStateFlow()
+    
+    private val _isDownloadingFirmware = MutableStateFlow(false)
+    val isDownloadingFirmware: StateFlow<Boolean> = _isDownloadingFirmware.asStateFlow()
+    
+    private val _downloadProgress = MutableStateFlow(0)
+    val downloadProgress: StateFlow<Int> = _downloadProgress.asStateFlow()
+    
+    private var firmwareUpdateManager: FirmwareUpdateManager? = null
+    
     init {
         // Auto-refresh status when connected
         viewModelScope.launch {
             connectionState.collect { state ->
                 if (state == ConnectionState.CONNECTED) {
+                    val connectedDevice = bluetoothService.getCurrentDevice()
+                    if (connectedDevice != null) {
+                        val name = try {
+                            connectedDevice.name ?: "ArkLights Device"
+                        } catch (e: SecurityException) {
+                            "ArkLights Device"
+                        }
+                        deviceStore.saveDevice(name, connectedDevice.address)
+                    }
                     refreshStatus()
                     // Start periodic status updates
                     startStatusUpdates()
@@ -69,7 +119,17 @@ class ArkLightsViewModel(
     }
     
     suspend fun connectToDevice(device: BluetoothDevice): Boolean {
+        _selectedDevice.value = device
         return bluetoothService.connectToDevice(device)
+    }
+
+    suspend fun connectToSavedDevice(address: String): Boolean {
+        val device = bluetoothService.getRemoteDevice(address) ?: return false
+        return connectToDevice(device)
+    }
+
+    suspend fun removeSavedDevice(address: String) {
+        deviceStore.removeDevice(address)
     }
     
     suspend fun disconnect(): Boolean {
@@ -79,8 +139,56 @@ class ArkLightsViewModel(
     suspend fun refreshStatus() {
         val status = apiService.getStatus()
         if (status != null) {
-            _deviceStatus.value = status
+            val resolvedPresets = if (status.presets.isNotEmpty()) {
+                cachedPresets = status.presets
+                status.presets
+            } else {
+                cachedPresets
+            }
+            val resolvedPresetCount = if (status.presetCount > 0) {
+                status.presetCount
+            } else {
+                resolvedPresets.size
+            }
+            val now = System.currentTimeMillis()
+            val shouldForceCalibration = now < calibrationForcedUntilMs && !status.calibration_mode
+            val forcedStatus = if (shouldForceCalibration) {
+                status.copy(
+                    calibration_mode = true,
+                    calibration_step = 0,
+                    calibration_complete = false
+                )
+            } else {
+                status
+            }
+
+            _deviceStatus.value = forcedStatus.copy(
+                presets = resolvedPresets,
+                presetCount = resolvedPresetCount
+            )
+            if (forcedStatus.calibration_mode) {
+                startCalibrationRefreshIfNeeded()
+            } else {
+                stopCalibrationRefresh()
+            }
         }
+    }
+
+    private fun startCalibrationRefreshIfNeeded() {
+        if (calibrationRefreshJob?.isActive == true) return
+        calibrationRefreshJob = viewModelScope.launch {
+            while (true) {
+                refreshStatus()
+                kotlinx.coroutines.delay(2000)
+                val status = _deviceStatus.value
+                if (status == null || !status.calibration_mode) break
+            }
+        }
+    }
+
+    private fun stopCalibrationRefresh() {
+        calibrationRefreshJob?.cancel()
+        calibrationRefreshJob = null
     }
     
     private fun startStatusUpdates() {
@@ -109,12 +217,38 @@ class ArkLightsViewModel(
     }
     
     suspend fun setHeadlightColor(color: String) {
-        apiService.setHeadlightColor(color)
+        // Strip # prefix if present - device expects color without #
+        val cleanColor = color.removePrefix("#")
+        apiService.setHeadlightColor(cleanColor)
+        refreshStatus()
+    }
+
+    suspend fun setHeadlightBackgroundEnabled(enabled: Boolean) {
+        apiService.setHeadlightBackgroundEnabled(enabled)
+        refreshStatus()
+    }
+
+    suspend fun setHeadlightBackgroundColor(color: String) {
+        val cleanColor = color.removePrefix("#")
+        apiService.setHeadlightBackgroundColor(cleanColor)
         refreshStatus()
     }
     
     suspend fun setTaillightColor(color: String) {
-        apiService.setTaillightColor(color)
+        // Strip # prefix if present - device expects color without #
+        val cleanColor = color.removePrefix("#")
+        apiService.setTaillightColor(cleanColor)
+        refreshStatus()
+    }
+
+    suspend fun setTaillightBackgroundEnabled(enabled: Boolean) {
+        apiService.setTaillightBackgroundEnabled(enabled)
+        refreshStatus()
+    }
+
+    suspend fun setTaillightBackgroundColor(color: String) {
+        val cleanColor = color.removePrefix("#")
+        apiService.setTaillightBackgroundColor(cleanColor)
         refreshStatus()
     }
     
@@ -127,10 +261,25 @@ class ArkLightsViewModel(
         apiService.setTaillightEffect(effect)
         refreshStatus()
     }
+
+    suspend fun setHeadlightMode(mode: Int) {
+        apiService.setHeadlightMode(mode)
+        refreshStatus()
+    }
     
     // Motion Control Methods
     suspend fun setMotionEnabled(enabled: Boolean) {
         apiService.setMotionEnabled(enabled)
+        refreshStatus()
+    }
+
+    suspend fun setDirectionBasedLighting(enabled: Boolean) {
+        apiService.setDirectionBasedLighting(enabled)
+        refreshStatus()
+    }
+
+    suspend fun setForwardAccelThreshold(threshold: Double) {
+        apiService.setForwardAccelThreshold(threshold)
         refreshStatus()
     }
     
@@ -146,6 +295,54 @@ class ArkLightsViewModel(
     
     suspend fun setImpactDetectionEnabled(enabled: Boolean) {
         apiService.setImpactDetectionEnabled(enabled)
+        refreshStatus()
+    }
+
+    suspend fun setBrakingEnabled(enabled: Boolean) {
+        apiService.setBrakingEnabled(enabled)
+        refreshStatus()
+    }
+
+    suspend fun setBrakingThreshold(threshold: Double) {
+        apiService.setBrakingThreshold(threshold)
+        refreshStatus()
+    }
+
+    suspend fun setBrakingEffect(effect: Int) {
+        apiService.setBrakingEffect(effect)
+        refreshStatus()
+    }
+
+    suspend fun setBrakingBrightness(brightness: Int) {
+        apiService.setBrakingBrightness(brightness)
+        refreshStatus()
+    }
+
+    suspend fun setRgbwWhiteMode(mode: Int) {
+        apiService.setRgbwWhiteMode(mode)
+        refreshStatus()
+    }
+
+    suspend fun startOtaViaBle(url: String): Boolean {
+        return apiService.startOtaViaBle(url)
+    }
+
+    suspend fun getOtaStatus(): OtaStatus? {
+        return apiService.getOtaStatus()
+    }
+
+    suspend fun setWhiteLEDsEnabled(enabled: Boolean) {
+        apiService.setWhiteLEDsEnabled(enabled)
+        refreshStatus()
+    }
+
+    suspend fun setManualBlinker(direction: String) {
+        apiService.setManualBlinker(direction)
+        refreshStatus()
+    }
+
+    suspend fun setManualBrake(enabled: Boolean) {
+        apiService.setManualBrake(enabled)
         refreshStatus()
     }
     
@@ -213,16 +410,28 @@ class ArkLightsViewModel(
     // Calibration Methods
     suspend fun startCalibration() {
         apiService.startCalibration()
+        val current = _deviceStatus.value
+        if (current != null) {
+            _deviceStatus.value = current.copy(
+                calibration_mode = true,
+                calibration_step = 0,
+                calibration_complete = false
+            )
+        }
+        calibrationForcedUntilMs = System.currentTimeMillis() + 6000
+        startCalibrationRefreshIfNeeded()
         refreshStatus()
     }
     
     suspend fun nextCalibrationStep() {
         apiService.nextCalibrationStep()
+        startCalibrationRefreshIfNeeded()
         refreshStatus()
     }
     
     suspend fun resetCalibration() {
         apiService.resetCalibration()
+        stopCalibrationRefresh()
         refreshStatus()
     }
     
@@ -265,6 +474,11 @@ class ArkLightsViewModel(
         apiService.applyWiFiConfig(name, password)
         refreshStatus()
     }
+
+    suspend fun restoreDefaults() {
+        apiService.restoreDefaults()
+        // Device will restart and disconnect - no need to refresh
+    }
     
     // ESPNow Configuration
     suspend fun setESPNowEnabled(enabled: Boolean) {
@@ -288,13 +502,18 @@ class ArkLightsViewModel(
         refreshStatus()
     }
     
-    suspend fun createGroup(code: String) {
+    suspend fun createGroup(code: String?) {
         apiService.createGroup(code)
         refreshStatus()
     }
     
     suspend fun joinGroup(code: String) {
         apiService.joinGroup(code)
+        refreshStatus()
+    }
+
+    suspend fun scanJoinGroup() {
+        apiService.scanJoinGroup()
         refreshStatus()
     }
     
@@ -310,6 +529,21 @@ class ArkLightsViewModel(
     
     suspend fun blockGroupJoin() {
         apiService.blockGroupJoin()
+        refreshStatus()
+    }
+
+    suspend fun savePreset(name: String) {
+        apiService.savePreset(name)
+        refreshStatus()
+    }
+
+    suspend fun updatePreset(index: Int, name: String) {
+        apiService.updatePreset(index, name)
+        refreshStatus()
+    }
+
+    suspend fun deletePreset(index: Int) {
+        apiService.deletePreset(index)
         refreshStatus()
     }
     
@@ -330,5 +564,178 @@ class ArkLightsViewModel(
     
     fun rgbToHex(r: Int, g: Int, b: Int): String {
         return String.format("#%02X%02X%02X", r, g, b)
+    }
+    
+    // ============================================
+    // OTA UPDATE METHODS
+    // ============================================
+    
+    fun setOtaFile(fileName: String, fileBytes: ByteArray) {
+        _otaFileName.value = fileName
+        _otaFileBytes.value = fileBytes
+        _otaStatus.value = "Ready"
+        _otaProgress.value = 0
+    }
+    
+    fun clearOtaFile() {
+        _otaFileName.value = null
+        _otaFileBytes.value = null
+        _otaStatus.value = "Ready"
+        _otaProgress.value = 0
+    }
+    
+    fun cancelOtaUpload() {
+        _otaUploading.value = false
+        _otaStatus.value = "Cancelled"
+        _otaProgress.value = 0
+    }
+    
+    suspend fun uploadFirmware(): Boolean {
+        val fileBytes = _otaFileBytes.value ?: return false
+        val fileName = _otaFileName.value ?: return false
+        
+        _otaUploading.value = true
+        _otaStatus.value = "Uploading..."
+        _otaProgress.value = 0
+        
+        return try {
+            val result = apiService.uploadFirmwareViaHttp(
+                fileBytes = fileBytes,
+                fileName = fileName,
+                onProgress = { progress ->
+                    _otaProgress.value = progress
+                    _otaStatus.value = when {
+                        progress < 100 -> "Uploading..."
+                        else -> "Installing..."
+                    }
+                }
+            )
+            
+            if (result) {
+                _otaStatus.value = "Complete! Device restarting..."
+                _otaProgress.value = 100
+                // Clear file after successful upload
+                clearOtaFile()
+            } else {
+                _otaStatus.value = "Upload failed"
+            }
+            result
+        } catch (e: Exception) {
+            _otaStatus.value = "Error: ${e.message}"
+            false
+        } finally {
+            _otaUploading.value = false
+        }
+    }
+    
+    // ============================================
+    // AUTOMATIC FIRMWARE UPDATE CHECKING
+    // ============================================
+    
+    /**
+     * Initialize the firmware update manager with context
+     */
+    fun initFirmwareUpdateManager(context: Context) {
+        if (firmwareUpdateManager == null) {
+            firmwareUpdateManager = FirmwareUpdateManager(context)
+        }
+    }
+    
+    /**
+     * Check if we should auto-check for updates (once per week)
+     */
+    fun shouldAutoCheckForUpdates(): Boolean {
+        return firmwareUpdateManager?.shouldAutoCheck() ?: false
+    }
+    
+    /**
+     * Check for firmware updates from remote server
+     */
+    suspend fun checkForUpdates() {
+        val manager = firmwareUpdateManager ?: return
+        val currentVersion = _deviceStatus.value?.let { 
+            // Extract version from firmware_version or build_date
+            it.build_date.takeIf { date -> date.isNotEmpty() } 
+                ?: "v8.0"  // Default fallback
+        }
+        
+        _isCheckingForUpdates.value = true
+        
+        try {
+            val manifest = manager.checkForUpdates()
+            
+            if (manifest != null && manager.isUpdateAvailable(currentVersion, manifest.latest_version)) {
+                // Check if user dismissed this version
+                if (!manager.isVersionDismissed(manifest.latest_version)) {
+                    _updateAvailable.value = manifest
+                }
+            } else {
+                _updateAvailable.value = null
+            }
+        } catch (e: Exception) {
+            // Silent fail - don't bother user with update check errors
+        } finally {
+            _isCheckingForUpdates.value = false
+        }
+    }
+    
+    /**
+     * Dismiss the update notification for current version
+     */
+    fun dismissUpdate() {
+        val version = _updateAvailable.value?.latest_version ?: return
+        firmwareUpdateManager?.dismissVersion(version)
+        _updateAvailable.value = null
+    }
+    
+    /**
+     * Download firmware from remote server and prepare for upload
+     */
+    suspend fun downloadAndPrepareUpdate(): Boolean {
+        val manager = firmwareUpdateManager ?: return false
+        val manifest = _updateAvailable.value ?: return false
+        
+        _isDownloadingFirmware.value = true
+        _downloadProgress.value = 0
+        _otaStatus.value = "Downloading update..."
+        
+        return try {
+            val firmwareFile = manager.downloadFirmware(
+                url = manifest.download_url,
+                onProgress = { progress ->
+                    _downloadProgress.value = progress
+                }
+            )
+            
+            if (firmwareFile != null && firmwareFile.exists()) {
+                // Read file bytes and set as OTA file
+                val bytes = firmwareFile.readBytes()
+                val fileName = "arklights-${manifest.latest_version}.bin"
+                setOtaFile(fileName, bytes)
+                _otaStatus.value = "Download complete. Connect to device WiFi to install."
+                true
+            } else {
+                _otaStatus.value = "Download failed"
+                false
+            }
+        } catch (e: Exception) {
+            _otaStatus.value = "Download error: ${e.message}"
+            false
+        } finally {
+            _isDownloadingFirmware.value = false
+        }
+    }
+    
+    /**
+     * One-click update: download and upload in sequence
+     */
+    suspend fun performAutomaticUpdate(): Boolean {
+        // Step 1: Download firmware
+        if (!downloadAndPrepareUpdate()) {
+            return false
+        }
+        
+        // Step 2: Upload to device (user must be on device WiFi)
+        return uploadFirmware()
     }
 }
