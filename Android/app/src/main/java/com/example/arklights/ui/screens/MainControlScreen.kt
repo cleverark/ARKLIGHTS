@@ -712,6 +712,15 @@ fun SettingsPage(
             }
         )
         
+        // Factory Reset Section
+        FactoryResetSection(
+            onFactoryReset = {
+                scope.launch {
+                    viewModel.restoreDefaults()
+                }
+            }
+        )
+        
         // Device Status Debug Section - Shows raw data from controller
         DeviceStatusDebugSection(deviceStatus = deviceStatus)
     }

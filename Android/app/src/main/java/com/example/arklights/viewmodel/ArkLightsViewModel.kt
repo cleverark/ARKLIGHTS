@@ -590,13 +590,47 @@ class ArkLightsViewModel(
         _otaProgress.value = 0
     }
     
+    /**
+     * Check if the device appears to be on the ArkLights WiFi network.
+     * This is a heuristic check - we try to reach the device's status endpoint.
+     */
+    suspend fun checkDeviceWifiConnection(): Boolean {
+        return try {
+            val url = java.net.URL("http://192.168.4.1/api/status")
+            val connection = url.openConnection() as java.net.HttpURLConnection
+            connection.connectTimeout = 3000
+            connection.readTimeout = 3000
+            connection.requestMethod = "GET"
+            val responseCode = connection.responseCode
+            connection.disconnect()
+            responseCode == 200
+        } catch (e: Exception) {
+            false
+        }
+    }
+    
     suspend fun uploadFirmware(): Boolean {
-        val fileBytes = _otaFileBytes.value ?: return false
-        val fileName = _otaFileName.value ?: return false
+        val fileBytes = _otaFileBytes.value
+        val fileName = _otaFileName.value
+        
+        if (fileBytes == null || fileName == null) {
+            _otaStatus.value = "No firmware file selected"
+            return false
+        }
         
         _otaUploading.value = true
-        _otaStatus.value = "Uploading..."
+        _otaStatus.value = "Checking device connection..."
         _otaProgress.value = 0
+        
+        // Check if we can reach the device first
+        val canReachDevice = checkDeviceWifiConnection()
+        if (!canReachDevice) {
+            _otaStatus.value = "Cannot reach device. Connect to device WiFi first."
+            _otaUploading.value = false
+            return false
+        }
+        
+        _otaStatus.value = "Uploading..."
         
         return try {
             val result = apiService.uploadFirmwareViaHttp(
@@ -605,7 +639,7 @@ class ArkLightsViewModel(
                 onProgress = { progress ->
                     _otaProgress.value = progress
                     _otaStatus.value = when {
-                        progress < 100 -> "Uploading..."
+                        progress < 100 -> "Uploading... ${progress}%"
                         else -> "Installing..."
                     }
                 }
@@ -617,7 +651,9 @@ class ArkLightsViewModel(
                 // Clear file after successful upload
                 clearOtaFile()
             } else {
-                _otaStatus.value = "Upload failed"
+                // Get error from API service
+                val error = apiService.lastError.value ?: "Upload failed"
+                _otaStatus.value = error
             }
             result
         } catch (e: Exception) {

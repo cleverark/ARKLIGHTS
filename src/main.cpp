@@ -16,6 +16,7 @@
 #include "BLEServer.h"
 #include "BLEUtils.h"
 #include "BLE2902.h"
+#include "embedded_ui.h"  // Auto-generated embedded UI files (gzipped)
 
 // CRGBW struct for RGBW LED support
 struct CRGBW {
@@ -55,7 +56,7 @@ struct CRGBW {
 // This is a clean, focused implementation for PEV devices
 
 // Debug flag - set to false to disable all debug Serial output for release builds
-#define DEBUG_ENABLED true
+#define DEBUG_ENABLED false
 
 // Configuration for XIAO ESP32S3
 #define HEADLIGHT_PIN 2
@@ -179,6 +180,12 @@ int bleRequestBodyLength = -1;
 String blePendingJson = "";
 bool blePendingApply = false;
 portMUX_TYPE blePendingMutex = portMUX_INITIALIZER_UNLOCKED;
+
+// BLE deferred responses (to avoid stack overflow in BLE callback)
+volatile bool blePendingStatusRequest = false;
+volatile uint8_t blePendingStatusSeq = 0;
+volatile bool blePendingOtaStatusRequest = false;
+volatile uint8_t blePendingOtaStatusSeq = 0;
 constexpr uint8_t BLE_REQUEST_QUEUE_SIZE = 4;
 String bleRequestQueue[BLE_REQUEST_QUEUE_SIZE];
 volatile uint8_t bleRequestQueueHead = 0;
@@ -261,14 +268,10 @@ class MyCallbacks: public BLECharacteristicCallbacks {
             if (frame.flags & BLE_FRAME_FLAG_ACK_REQUIRED) {
               sendBleAck(frame.seq);
             }
-            String statusJson = getStatusJSON();
-            sendBleFrame(
-                BLE_MSG_STATUS_RESPONSE,
-                frame.seq,
-                0,
-                reinterpret_cast<const uint8_t*>(statusJson.c_str()),
-                statusJson.length()
-            );
+            // Defer status response to main loop to avoid stack overflow
+            // (getStatusJSON allocates 4KB DynamicJsonDocument)
+            blePendingStatusSeq = frame.seq;
+            blePendingStatusRequest = true;
           } else if (frame.type == BLE_MSG_OTA_START) {
             if (frame.flags & BLE_FRAME_FLAG_ACK_REQUIRED) {
               sendBleAck(frame.seq);
@@ -280,26 +283,16 @@ class MyCallbacks: public BLECharacteristicCallbacks {
               );
               startOTAUpdate(url);
             }
-            String otaStatusJson = getOtaStatusJSON();
-            sendBleFrame(
-                BLE_MSG_OTA_STATUS,
-                frame.seq,
-                0,
-                reinterpret_cast<const uint8_t*>(otaStatusJson.c_str()),
-                otaStatusJson.length()
-            );
+            // Defer OTA status response to main loop
+            blePendingOtaStatusSeq = frame.seq;
+            blePendingOtaStatusRequest = true;
           } else if (frame.type == BLE_MSG_OTA_STATUS) {
             if (frame.flags & BLE_FRAME_FLAG_ACK_REQUIRED) {
               sendBleAck(frame.seq);
             }
-            String otaStatusJson = getOtaStatusJSON();
-            sendBleFrame(
-                BLE_MSG_OTA_STATUS,
-                frame.seq,
-                0,
-                reinterpret_cast<const uint8_t*>(otaStatusJson.c_str()),
-                otaStatusJson.length()
-            );
+            // Defer OTA status response to main loop
+            blePendingOtaStatusSeq = frame.seq;
+            blePendingOtaStatusRequest = true;
           } else if (frame.type == BLE_MSG_ACK) {
             // No-op for device
           } else {
@@ -877,6 +870,7 @@ void setupWebServer();
 void handleRoot();
 void handleUI();
 void handleUIUpdate();
+bool serveEmbeddedFile(const char* filename);
 bool processUIUpdate(const String& updatePath);
 bool processUIUpdateStreaming(const String& updatePath);
 bool applyApiJson(DynamicJsonDocument& doc, bool allowRestart, bool& shouldRestart);
@@ -1096,6 +1090,34 @@ void loop() {
                 ESP.restart();
             }
         }
+    }
+    
+    // Handle deferred BLE status responses (to avoid stack overflow in BLE callback)
+    // These run in main loop which has much more stack space than BTC_TASK
+    if (blePendingStatusRequest) {
+        blePendingStatusRequest = false;
+        uint8_t seq = blePendingStatusSeq;
+        String statusJson = getStatusJSON();
+        sendBleFrame(
+            BLE_MSG_STATUS_RESPONSE,
+            seq,
+            0,
+            reinterpret_cast<const uint8_t*>(statusJson.c_str()),
+            statusJson.length()
+        );
+    }
+    
+    if (blePendingOtaStatusRequest) {
+        blePendingOtaStatusRequest = false;
+        uint8_t seq = blePendingOtaStatusSeq;
+        String otaStatusJson = getOtaStatusJSON();
+        sendBleFrame(
+            BLE_MSG_OTA_STATUS,
+            seq,
+            0,
+            reinterpret_cast<const uint8_t*>(otaStatusJson.c_str()),
+            otaStatusJson.length()
+        );
     }
     
     delay(10);
@@ -3911,10 +3933,11 @@ void handleOTAUpload() {
             FastLED.show();
             
             // Send success response to client before restart
+            server.sendHeader("Access-Control-Allow-Origin", "*");
             server.send(200, "application/json", "{\"success\":true,\"message\":\"Update complete, restarting...\"}");
             
             // Give the client time to receive the response
-            delay(1000);
+            delay(1500);
             ESP.restart();
         } else {
             String errorMsg = Update.errorString();
@@ -4684,7 +4707,23 @@ void setupWebServer() {
     server.on("/api/led-test", HTTP_POST, handleLEDTest);
     server.on("/api/settings", HTTP_GET, handleGetSettings);
     server.on("/api/ota-upload", HTTP_POST, []() {
-        server.send(200, "application/json", "{\"success\":true,\"message\":\"Upload complete\"}");
+        // This handler is called after handleOTAUpload completes
+        // Check actual OTA status to return appropriate response
+        // Note: If update was successful, the device restarts in handleOTAUpload
+        // so this code only runs if there was an error
+        if (otaError.length() > 0) {
+            server.sendHeader("Access-Control-Allow-Origin", "*");
+            String response = "{\"success\":false,\"error\":\"" + otaError + "\"}";
+            server.send(500, "application/json", response);
+        } else if (!otaInProgress && otaStatus == "Complete") {
+            // Update completed but restart didn't happen yet
+            server.sendHeader("Access-Control-Allow-Origin", "*");
+            server.send(200, "application/json", "{\"success\":true,\"message\":\"Update complete, restarting...\"}");
+        } else {
+            // Unknown state - likely still processing
+            server.sendHeader("Access-Control-Allow-Origin", "*");
+            server.send(200, "application/json", "{\"success\":true,\"message\":\"Upload received\"}");
+        }
     }, handleOTAUpload);
     
     // Handle CORS preflight requests
@@ -4695,74 +4734,114 @@ void setupWebServer() {
         server.send(200, "text/plain", "");
     });
     
+    server.on("/api/ota-upload", HTTP_OPTIONS, []() {
+        server.sendHeader("Access-Control-Allow-Origin", "*");
+        server.sendHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
+        server.sendHeader("Access-Control-Allow-Headers", "Content-Type");
+        server.send(200, "text/plain", "");
+    });
+    
     server.begin();
     Serial.println("Web server started");
 }
 
 void handleUI() {
     String uri = server.uri();
-    String contentType = "text/plain";
     
     Serial.printf("🎨 handleUI: Requesting file: %s\n", uri.c_str());
     
-    if (uri.endsWith(".css")) {
-        contentType = "text/css";
-    } else if (uri.endsWith(".js")) {
-        contentType = "application/javascript";
+    // Extract just the filename from the URI
+    String filename = uri;
+    if (filename.startsWith("/ui/")) {
+        filename = filename.substring(4);  // Remove "/ui/" prefix
+    } else if (filename.startsWith("/")) {
+        filename = filename.substring(1);  // Remove leading "/"
     }
     
-    // Try requested path first, then fallback to other location
-    String filePath = uri;
+    // Priority 1: Check for SPIFFS override (allows custom UI)
+    String filePath = "/ui/" + filename;
     File file = SPIFFS.open(filePath, "r");
-    
-    if (!file || file.size() == 0) {
-        // Try alternative location as fallback
-        String altPath;
-        if (uri.startsWith("/ui/")) {
-            // If requesting /ui/file, try root directory
-            altPath = uri.substring(4); // Remove "/ui/" prefix
-        } else {
-            // If requesting root file, try /ui/ directory
-            altPath = "/ui" + uri;
-        }
-        
-        Serial.printf("⚠️ %s not found or empty, trying: %s\n", filePath.c_str(), altPath.c_str());
-        file = SPIFFS.open(altPath, "r");
-        filePath = altPath;
-    }
-    
     if (file && file.size() > 0) {
-        Serial.printf("✅ handleUI: Found file %s (%d bytes), serving as %s\n", filePath.c_str(), file.size(), contentType.c_str());
+        String contentType = "text/plain";
+        if (filename.endsWith(".css")) contentType = "text/css";
+        else if (filename.endsWith(".js")) contentType = "application/javascript";
+        
+        Serial.printf("✅ Serving custom file from SPIFFS: %s (%d bytes)\n", filePath.c_str(), file.size());
         server.streamFile(file, contentType);
         file.close();
-    } else {
-        Serial.printf("❌ handleUI: File not found or empty: %s\n", filePath.c_str());
-        server.send(404, "text/plain", "File not found: " + uri);
+        return;
     }
+    if (file) file.close();
+    
+    // Try root directory
+    filePath = "/" + filename;
+    file = SPIFFS.open(filePath, "r");
+    if (file && file.size() > 0) {
+        String contentType = "text/plain";
+        if (filename.endsWith(".css")) contentType = "text/css";
+        else if (filename.endsWith(".js")) contentType = "application/javascript";
+        
+        Serial.printf("✅ Serving custom file from SPIFFS root: %s (%d bytes)\n", filePath.c_str(), file.size());
+        server.streamFile(file, contentType);
+        file.close();
+        return;
+    }
+    if (file) file.close();
+    
+    // Priority 2: Serve embedded gzipped file
+    if (serveEmbeddedFile(filename.c_str())) {
+        return;
+    }
+    
+    // Not found
+    Serial.printf("❌ handleUI: File not found: %s\n", uri.c_str());
+    server.send(404, "text/plain", "File not found: " + uri);
+}
+
+// Serve embedded gzipped file with proper headers
+bool serveEmbeddedFile(const char* filename) {
+    const EmbeddedFile* file = findEmbeddedFile(filename);
+    if (file == nullptr) {
+        return false;
+    }
+    
+    Serial.printf("📦 Serving embedded file: %s (%d bytes gzipped)\n", filename, file->length);
+    
+    server.sendHeader("Content-Encoding", "gzip");
+    server.sendHeader("Cache-Control", "max-age=86400");  // Cache for 1 day
+    server.send_P(200, file->contentType, (const char*)file->data, file->length);
+    return true;
 }
 
 void handleRoot() {
-    // Try to serve external HTML file first, fallback to embedded if not found
-    Serial.println("🔍 handleRoot: Attempting to serve /ui/index.html");
+    // Priority 1: Check for SPIFFS override (allows custom UI without reflashing)
     File file = SPIFFS.open("/ui/index.html", "r");
     if (file && file.size() > 0) {
-        Serial.printf("✅ Found external UI file (%d bytes), serving from SPIFFS\n", file.size());
+        Serial.printf("✅ Serving custom UI from SPIFFS (%d bytes)\n", file.size());
         server.streamFile(file, "text/html");
         file.close();
-    } else {
-        // Try root directory as fallback
-        Serial.println("⚠️ /ui/index.html not found or empty, trying /index.html");
-        file = SPIFFS.open("/index.html", "r");
-        if (file && file.size() > 0) {
-            Serial.printf("✅ Found root UI file (%d bytes), serving from SPIFFS\n", file.size());
-            server.streamFile(file, "text/html");
-            file.close();
-        } else {
-            Serial.println("⚠️ No external UI file found, serving embedded UI");
-            // Fallback to embedded UI if SPIFFS files not found
-            serveEmbeddedUI();
-        }
+        return;
     }
+    if (file) file.close();
+    
+    // Try root directory
+    file = SPIFFS.open("/index.html", "r");
+    if (file && file.size() > 0) {
+        Serial.printf("✅ Serving custom UI from SPIFFS root (%d bytes)\n", file.size());
+        server.streamFile(file, "text/html");
+        file.close();
+        return;
+    }
+    if (file) file.close();
+    
+    // Priority 2: Serve embedded gzipped file (bundled with firmware)
+    if (serveEmbeddedFile("index.html")) {
+        return;
+    }
+    
+    // Priority 3: Fallback to embedded HTML string (minimal UI)
+    Serial.println("⚠️ Serving minimal embedded UI fallback");
+    serveEmbeddedUI();
 }
 
 void serveEmbeddedUI() {

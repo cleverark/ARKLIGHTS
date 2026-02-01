@@ -3,6 +3,9 @@
 .pioenvs/
 .piolibdeps/
 
+# Auto-generated files
+include/embedded_ui.h
+
 # IDE files
 .vscode/
 .idea/
