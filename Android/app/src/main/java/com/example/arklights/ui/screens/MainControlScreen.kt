@@ -178,8 +178,9 @@ fun MainControlsPage(
         val updateAvailable by viewModel.updateAvailable.collectAsState()
         val mainContext = LocalContext.current
         
-        // Initialize firmware manager and auto-check on main page too
+        // Initialize app context, firmware manager and auto-check on main page
         LaunchedEffect(Unit) {
+            viewModel.setAppContext(mainContext)
             viewModel.initFirmwareUpdateManager(mainContext)
             if (viewModel.shouldAutoCheckForUpdates()) {
                 viewModel.checkForUpdates()
@@ -638,8 +639,9 @@ fun SettingsPage(
         val isDownloadingFirmware by viewModel.isDownloadingFirmware.collectAsState()
         val downloadProgress by viewModel.downloadProgress.collectAsState()
         
-        // Initialize firmware update manager and auto-check
+        // Initialize firmware update manager, set app context for OTA, and auto-check
         LaunchedEffect(Unit) {
+            viewModel.setAppContext(context)
             viewModel.initFirmwareUpdateManager(context)
             if (viewModel.shouldAutoCheckForUpdates()) {
                 viewModel.checkForUpdates()

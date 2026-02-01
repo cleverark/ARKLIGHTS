@@ -465,47 +465,82 @@ class ArkLightsApiService(private val bluetoothService: BluetoothService) {
      * @param fileBytes The firmware binary data
      * @param fileName The name of the firmware file
      * @param onProgress Callback for upload progress (0-100)
+     * @param context Android context for network binding
      * @return true if upload was successful
      */
     suspend fun uploadFirmwareViaHttp(
         fileBytes: ByteArray,
         fileName: String,
-        onProgress: (Int) -> Unit
+        onProgress: (Int) -> Unit,
+        context: android.content.Context? = null
     ): Boolean = withContext(Dispatchers.IO) {
         val deviceIP = "192.168.4.1"  // Default ESP32 AP IP
         val url = java.net.URL("http://$deviceIP/api/ota-upload")
-        val boundary = "----FirmwareBoundary${System.currentTimeMillis()}"
+        // Boundary should NOT have leading dashes - they are added in the body
+        val boundary = "FirmwareBoundary${System.currentTimeMillis()}"
         
         _isLoading.value = true
         _lastError.value = null
         
+        // Build multipart body parts
+        val lineEnd = "\r\n"
+        
+        // Pre-calculate content to get exact length
+        // Body boundaries have -- prefix, end boundary has -- suffix too
+        val headerPart = ("--$boundary$lineEnd" +
+                "Content-Disposition: form-data; name=\"firmware\"; filename=\"$fileName\"$lineEnd" +
+                "Content-Type: application/octet-stream$lineEnd" +
+                lineEnd).toByteArray(Charsets.UTF_8)
+        
+        val footerPart = ("$lineEnd--$boundary--$lineEnd").toByteArray(Charsets.UTF_8)
+        
+        val totalContentLength = headerPart.size + fileBytes.size + footerPart.size
+        
+        android.util.Log.d("OTA", "Starting upload: $fileName, size: ${fileBytes.size}, total: $totalContentLength")
+        
         try {
-            val connection = url.openConnection() as java.net.HttpURLConnection
+            // Get WiFi network and bind connection to it (prevents routing through mobile data)
+            val wifiNetwork = context?.let { ctx ->
+                val connectivityManager = ctx.getSystemService(android.content.Context.CONNECTIVITY_SERVICE) as android.net.ConnectivityManager
+                connectivityManager.allNetworks.find { network ->
+                    val capabilities = connectivityManager.getNetworkCapabilities(network)
+                    capabilities?.hasTransport(android.net.NetworkCapabilities.TRANSPORT_WIFI) == true
+                }
+            }
+            
+            android.util.Log.d("OTA", "WiFi network found: ${wifiNetwork != null}")
+            
+            // Open connection through WiFi network if available, otherwise use default
+            val connection = if (wifiNetwork != null) {
+                android.util.Log.d("OTA", "Binding connection to WiFi network")
+                wifiNetwork.openConnection(url) as java.net.HttpURLConnection
+            } else {
+                android.util.Log.d("OTA", "Using default network (no WiFi binding)")
+                url.openConnection() as java.net.HttpURLConnection
+            }
+            
             connection.apply {
                 requestMethod = "POST"
                 doOutput = true
                 doInput = true
                 useCaches = false
                 connectTimeout = 30000
-                readTimeout = 120000  // 2 minutes for large files
+                readTimeout = 180000  // 3 minutes for large files
                 setRequestProperty("Content-Type", "multipart/form-data; boundary=$boundary")
+                setRequestProperty("Content-Length", totalContentLength.toString())
                 setRequestProperty("Connection", "Keep-Alive")
+                // Disable chunked streaming by setting fixed length
+                setFixedLengthStreamingMode(totalContentLength)
             }
             
-            // Build multipart form data
-            val lineEnd = "\r\n"
-            val twoHyphens = "--"
+            android.util.Log.d("OTA", "Connection configured, starting upload...")
             
-            connection.outputStream.bufferedWriter().use { writer ->
-                // Start boundary
-                writer.write(twoHyphens + boundary + lineEnd)
-                writer.write("Content-Disposition: form-data; name=\"firmware\"; filename=\"$fileName\"$lineEnd")
-                writer.write("Content-Type: application/octet-stream$lineEnd")
-                writer.write(lineEnd)
-                writer.flush()
+            connection.outputStream.use { os ->
+                // Write header part
+                os.write(headerPart)
+                android.util.Log.d("OTA", "Header written")
                 
                 // Write file bytes with progress tracking
-                val outputStream = connection.outputStream
                 val totalBytes = fileBytes.size
                 var bytesWritten = 0
                 val chunkSize = 4096
@@ -514,30 +549,42 @@ class ArkLightsApiService(private val bluetoothService: BluetoothService) {
                 while (offset < totalBytes) {
                     val remaining = totalBytes - offset
                     val toWrite = minOf(chunkSize, remaining)
-                    outputStream.write(fileBytes, offset, toWrite)
+                    os.write(fileBytes, offset, toWrite)
                     offset += toWrite
                     bytesWritten += toWrite
                     
                     val progress = (bytesWritten * 100) / totalBytes
                     onProgress(progress)
+                    
+                    // Log progress every 10%
+                    if (progress % 10 == 0 && progress > 0) {
+                        android.util.Log.d("OTA", "Upload progress: $progress%")
+                    }
                 }
-                outputStream.flush()
                 
-                // End boundary
-                writer.write(lineEnd)
-                writer.write(twoHyphens + boundary + twoHyphens + lineEnd)
-                writer.flush()
+                // Write footer part
+                os.write(footerPart)
+                os.flush()
+                android.util.Log.d("OTA", "Upload complete, waiting for response...")
             }
+            
+            android.util.Log.d("OTA", "Upload complete, waiting for response...")
             
             // Read response
             val responseCode = connection.responseCode
-            val responseBody = if (responseCode in 200..299) {
-                connection.inputStream.bufferedReader().readText()
-            } else {
-                connection.errorStream?.bufferedReader()?.readText() ?: "Unknown error"
+            val responseBody = try {
+                if (responseCode in 200..299) {
+                    connection.inputStream.bufferedReader().readText()
+                } else {
+                    connection.errorStream?.bufferedReader()?.readText() ?: "Unknown error"
+                }
+            } catch (e: Exception) {
+                "Response read error: ${e.message}"
             }
             
             connection.disconnect()
+            
+            android.util.Log.d("OTA", "Response code: $responseCode, body: $responseBody")
             
             if (responseCode in 200..299) {
                 // Parse response to check success
@@ -552,6 +599,7 @@ class ArkLightsApiService(private val bluetoothService: BluetoothService) {
                     }
                 } catch (e: Exception) {
                     // If response parsing fails but status was OK, assume success
+                    android.util.Log.d("OTA", "Response parse error (assuming success): ${e.message}")
                     onProgress(100)
                     true
                 }
@@ -560,13 +608,16 @@ class ArkLightsApiService(private val bluetoothService: BluetoothService) {
                 false
             }
         } catch (e: java.net.ConnectException) {
+            android.util.Log.e("OTA", "ConnectException: ${e.message}")
             _lastError.value = "Cannot connect to device. Make sure you're connected to the device's WiFi network."
             false
         } catch (e: java.net.SocketTimeoutException) {
+            android.util.Log.d("OTA", "SocketTimeoutException - device may be restarting")
             _lastError.value = "Connection timed out. The device may be restarting."
             // Timeout during upload might mean success (device is restarting)
             true
         } catch (e: Exception) {
+            android.util.Log.e("OTA", "Upload error: ${e.message}", e)
             _lastError.value = "Upload error: ${e.message}"
             false
         } finally {

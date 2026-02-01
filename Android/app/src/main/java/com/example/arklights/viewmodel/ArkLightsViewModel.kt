@@ -590,21 +590,70 @@ class ArkLightsViewModel(
         _otaProgress.value = 0
     }
     
+    // Store context for network binding
+    private var appContext: android.content.Context? = null
+    
+    /**
+     * Set the application context for network operations
+     */
+    fun setAppContext(context: android.content.Context) {
+        appContext = context.applicationContext
+    }
+    
+    /**
+     * Get WiFi network for binding connections
+     */
+    private fun getWifiNetwork(): android.net.Network? {
+        val ctx = appContext ?: return null
+        val connectivityManager = ctx.getSystemService(android.content.Context.CONNECTIVITY_SERVICE) as android.net.ConnectivityManager
+        return connectivityManager.allNetworks.find { network ->
+            val capabilities = connectivityManager.getNetworkCapabilities(network)
+            capabilities?.hasTransport(android.net.NetworkCapabilities.TRANSPORT_WIFI) == true
+        }
+    }
+    
     /**
      * Check if the device appears to be on the ArkLights WiFi network.
      * This is a heuristic check - we try to reach the device's status endpoint.
      */
-    suspend fun checkDeviceWifiConnection(): Boolean {
-        return try {
+    suspend fun checkDeviceWifiConnection(): Boolean = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+        try {
             val url = java.net.URL("http://192.168.4.1/api/status")
-            val connection = url.openConnection() as java.net.HttpURLConnection
-            connection.connectTimeout = 3000
-            connection.readTimeout = 3000
+            val wifiNetwork = getWifiNetwork()
+            
+            android.util.Log.d("OTA", "Checking device connection, WiFi network: ${wifiNetwork != null}")
+            
+            // Use WiFi network if available to avoid routing through mobile data
+            val connection = if (wifiNetwork != null) {
+                android.util.Log.d("OTA", "Opening connection via WiFi network binding")
+                wifiNetwork.openConnection(url) as java.net.HttpURLConnection
+            } else {
+                android.util.Log.d("OTA", "Opening connection via default network (no WiFi binding)")
+                url.openConnection() as java.net.HttpURLConnection
+            }
+            
+            connection.connectTimeout = 5000
+            connection.readTimeout = 5000
             connection.requestMethod = "GET"
+            
+            android.util.Log.d("OTA", "Connecting to device...")
             val responseCode = connection.responseCode
             connection.disconnect()
+            android.util.Log.d("OTA", "Device check response: $responseCode")
             responseCode == 200
+        } catch (e: java.net.SocketTimeoutException) {
+            android.util.Log.e("OTA", "Device check failed: Connection timeout")
+            false
+        } catch (e: java.net.ConnectException) {
+            android.util.Log.e("OTA", "Device check failed: Connection refused - ${e.message}")
+            false
+        } catch (e: java.io.IOException) {
+            android.util.Log.e("OTA", "Device check failed: IO error - ${e.javaClass.simpleName}: ${e.message}")
+            e.printStackTrace()
+            false
         } catch (e: Exception) {
+            android.util.Log.e("OTA", "Device check failed: ${e.javaClass.simpleName}: ${e.message}")
+            e.printStackTrace()
             false
         }
     }
@@ -642,7 +691,8 @@ class ArkLightsViewModel(
                         progress < 100 -> "Uploading... ${progress}%"
                         else -> "Installing..."
                     }
-                }
+                },
+                context = appContext
             )
             
             if (result) {

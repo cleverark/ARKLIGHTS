@@ -3858,6 +3858,9 @@ void handleOTAError(int error) {
 void handleOTAUpload() {
     HTTPUpload& upload = server.upload();
     
+    Serial.printf("📥 OTA Upload callback - status: %d, filename: %s, size: %d\n", 
+                  upload.status, upload.filename.c_str(), upload.currentSize);
+    
     if (upload.status == UPLOAD_FILE_START) {
         Serial.printf("📁 Starting firmware upload: %s\n", upload.filename.c_str());
         
@@ -4707,6 +4710,10 @@ void setupWebServer() {
     server.on("/api/led-test", HTTP_POST, handleLEDTest);
     server.on("/api/settings", HTTP_GET, handleGetSettings);
     server.on("/api/ota-upload", HTTP_POST, []() {
+        Serial.println("📤 OTA POST handler called (after upload processing)");
+        Serial.printf("📤 OTA state: inProgress=%d, status=%s, error=%s\n", 
+                      otaInProgress, otaStatus.c_str(), otaError.c_str());
+        
         // This handler is called after handleOTAUpload completes
         // Check actual OTA status to return appropriate response
         // Note: If update was successful, the device restarts in handleOTAUpload
@@ -4714,17 +4721,27 @@ void setupWebServer() {
         if (otaError.length() > 0) {
             server.sendHeader("Access-Control-Allow-Origin", "*");
             String response = "{\"success\":false,\"error\":\"" + otaError + "\"}";
+            Serial.printf("📤 Sending error response: %s\n", response.c_str());
             server.send(500, "application/json", response);
         } else if (!otaInProgress && otaStatus == "Complete") {
             // Update completed but restart didn't happen yet
             server.sendHeader("Access-Control-Allow-Origin", "*");
+            Serial.println("📤 Sending success response (update complete)");
             server.send(200, "application/json", "{\"success\":true,\"message\":\"Update complete, restarting...\"}");
         } else {
-            // Unknown state - likely still processing
+            // Unknown state - likely still processing or no upload received
             server.sendHeader("Access-Control-Allow-Origin", "*");
+            Serial.println("📤 Sending generic response (upload received or unknown state)");
             server.send(200, "application/json", "{\"success\":true,\"message\":\"Upload received\"}");
         }
     }, handleOTAUpload);
+    
+    // Debug endpoint to test connectivity
+    server.on("/api/ota-test", HTTP_GET, []() {
+        Serial.println("🔍 OTA test endpoint called");
+        server.sendHeader("Access-Control-Allow-Origin", "*");
+        server.send(200, "application/json", "{\"success\":true,\"message\":\"OTA endpoint reachable\"}");
+    });
     
     // Handle CORS preflight requests
     server.on("/api", HTTP_OPTIONS, []() {

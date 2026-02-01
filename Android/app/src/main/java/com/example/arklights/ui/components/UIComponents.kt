@@ -2835,6 +2835,23 @@ fun OTAUpdateSection(
                                     color = MaterialTheme.colorScheme.tertiary
                                 )
                                 
+                                // Show status message (always visible when not "Ready")
+                                if (uploadStatus != "Ready") {
+                                    val statusColor = when {
+                                        uploadStatus.contains("error", ignoreCase = true) || 
+                                        uploadStatus.contains("failed", ignoreCase = true) ||
+                                        uploadStatus.contains("Cannot", ignoreCase = true) -> MaterialTheme.colorScheme.error
+                                        uploadStatus.contains("Complete", ignoreCase = true) -> MaterialTheme.colorScheme.primary
+                                        else -> MaterialTheme.colorScheme.onSurfaceVariant
+                                    }
+                                    Text(
+                                        text = uploadStatus,
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        color = statusColor,
+                                        fontWeight = FontWeight.Medium
+                                    )
+                                }
+                                
                                 if (isUploading) {
                                     // Progress indicator
                                     LinearProgressIndicator(
@@ -2843,8 +2860,8 @@ fun OTAUpdateSection(
                                     )
                                     
                                     Text(
-                                        text = "$uploadStatus ($uploadProgress%)",
-                                        style = MaterialTheme.typography.bodyMedium,
+                                        text = "Progress: $uploadProgress%",
+                                        style = MaterialTheme.typography.bodySmall,
                                         color = MaterialTheme.colorScheme.onSurfaceVariant
                                     )
                                     
