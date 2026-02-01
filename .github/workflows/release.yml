@@ -61,10 +61,10 @@ jobs:
       - name: Update version in firmware
         run: |
           VERSION="${{ steps.version.outputs.version }}"
-          # Update version in main.cpp if there's a version string
-          if grep -q 'firmware_version' src/main.cpp; then
-            sed -i "s/v[0-9]*\.[0-9]*[^\"']*/v$VERSION/g" src/main.cpp || true
-          fi
+          # Update version string in main.cpp (only matches quoted version strings like "v8.0 OTA")
+          # Using a very specific pattern to avoid matching code like .value
+          sed -i 's/"v[0-9]\+\.[0-9]\+[^"]*"/"v'"$VERSION"'"/g' src/main.cpp || true
+          echo "Updated version to v$VERSION"
       
       - name: Build firmware
         run: |
