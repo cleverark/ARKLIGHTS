@@ -453,4 +453,124 @@ class ArkLightsApiService(private val bluetoothService: BluetoothService) {
     suspend fun deletePreset(index: Int): Boolean {
         return sendControlRequest(LEDControlRequest(presetAction = "delete", presetIndex = index))
     }
+    
+    // ============================================
+    // OTA FIRMWARE UPLOAD VIA HTTP
+    // ============================================
+    
+    /**
+     * Upload firmware directly to the device via HTTP.
+     * Requires the phone to be connected to the device's WiFi AP.
+     * 
+     * @param fileBytes The firmware binary data
+     * @param fileName The name of the firmware file
+     * @param onProgress Callback for upload progress (0-100)
+     * @return true if upload was successful
+     */
+    suspend fun uploadFirmwareViaHttp(
+        fileBytes: ByteArray,
+        fileName: String,
+        onProgress: (Int) -> Unit
+    ): Boolean = withContext(Dispatchers.IO) {
+        val deviceIP = "192.168.4.1"  // Default ESP32 AP IP
+        val url = java.net.URL("http://$deviceIP/api/ota-upload")
+        val boundary = "----FirmwareBoundary${System.currentTimeMillis()}"
+        
+        _isLoading.value = true
+        _lastError.value = null
+        
+        try {
+            val connection = url.openConnection() as java.net.HttpURLConnection
+            connection.apply {
+                requestMethod = "POST"
+                doOutput = true
+                doInput = true
+                useCaches = false
+                connectTimeout = 30000
+                readTimeout = 120000  // 2 minutes for large files
+                setRequestProperty("Content-Type", "multipart/form-data; boundary=$boundary")
+                setRequestProperty("Connection", "Keep-Alive")
+            }
+            
+            // Build multipart form data
+            val lineEnd = "\r\n"
+            val twoHyphens = "--"
+            
+            connection.outputStream.bufferedWriter().use { writer ->
+                // Start boundary
+                writer.write(twoHyphens + boundary + lineEnd)
+                writer.write("Content-Disposition: form-data; name=\"firmware\"; filename=\"$fileName\"$lineEnd")
+                writer.write("Content-Type: application/octet-stream$lineEnd")
+                writer.write(lineEnd)
+                writer.flush()
+                
+                // Write file bytes with progress tracking
+                val outputStream = connection.outputStream
+                val totalBytes = fileBytes.size
+                var bytesWritten = 0
+                val chunkSize = 4096
+                
+                var offset = 0
+                while (offset < totalBytes) {
+                    val remaining = totalBytes - offset
+                    val toWrite = minOf(chunkSize, remaining)
+                    outputStream.write(fileBytes, offset, toWrite)
+                    offset += toWrite
+                    bytesWritten += toWrite
+                    
+                    val progress = (bytesWritten * 100) / totalBytes
+                    onProgress(progress)
+                }
+                outputStream.flush()
+                
+                // End boundary
+                writer.write(lineEnd)
+                writer.write(twoHyphens + boundary + twoHyphens + lineEnd)
+                writer.flush()
+            }
+            
+            // Read response
+            val responseCode = connection.responseCode
+            val responseBody = if (responseCode in 200..299) {
+                connection.inputStream.bufferedReader().readText()
+            } else {
+                connection.errorStream?.bufferedReader()?.readText() ?: "Unknown error"
+            }
+            
+            connection.disconnect()
+            
+            if (responseCode in 200..299) {
+                // Parse response to check success
+                try {
+                    val response = json.decodeFromString<ApiResponse>(responseBody)
+                    if (response.success) {
+                        onProgress(100)
+                        true
+                    } else {
+                        _lastError.value = response.error ?: "Upload failed"
+                        false
+                    }
+                } catch (e: Exception) {
+                    // If response parsing fails but status was OK, assume success
+                    onProgress(100)
+                    true
+                }
+            } else {
+                _lastError.value = "HTTP Error: $responseCode - $responseBody"
+                false
+            }
+        } catch (e: java.net.ConnectException) {
+            _lastError.value = "Cannot connect to device. Make sure you're connected to the device's WiFi network."
+            false
+        } catch (e: java.net.SocketTimeoutException) {
+            _lastError.value = "Connection timed out. The device may be restarting."
+            // Timeout during upload might mean success (device is restarting)
+            true
+        } catch (e: Exception) {
+            _lastError.value = "Upload error: ${e.message}"
+            false
+        } finally {
+            _isLoading.value = false
+        }
+    }
 }

@@ -25,6 +25,7 @@ import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
+import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -2460,4 +2461,448 @@ private fun BrightnessSlider(
 private fun hsvToHex(hue: Float, saturation: Float, brightness: Float): String {
     val color = android.graphics.Color.HSVToColor(floatArrayOf(hue, saturation, brightness))
     return String.format("%06X", color and 0xFFFFFF)
+}
+
+// ============================================
+// OTA UPDATE SECTION
+// ============================================
+
+@Composable
+fun OTAUpdateSection(
+    deviceStatus: LEDStatus?,
+    selectedFileName: String?,
+    isUploading: Boolean,
+    uploadProgress: Int,
+    uploadStatus: String,
+    // Automatic update props
+    updateAvailable: FirmwareManifest? = null,
+    isCheckingForUpdates: Boolean = false,
+    isDownloadingFirmware: Boolean = false,
+    downloadProgress: Int = 0,
+    onSelectFile: () -> Unit,
+    onStartUpload: () -> Unit,
+    onCancelUpload: () -> Unit,
+    onCheckForUpdates: () -> Unit = {},
+    onDownloadAndInstall: () -> Unit = {},
+    onDismissUpdate: () -> Unit = {}
+) {
+    var expanded by remember { mutableStateOf(updateAvailable != null) }
+    
+    val apName = deviceStatus?.apName ?: "ARKLIGHTS-AP"
+    val apPassword = deviceStatus?.apPassword ?: "float420"
+    val deviceIP = "192.168.4.1" // Default AP IP for ESP32
+    
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surface
+        ),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.2f))
+    ) {
+        Column {
+            // Header
+            Surface(
+                onClick = { expanded = !expanded },
+                color = Color.Transparent
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(16.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column {
+                        Text(
+                            text = "Firmware Update",
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                        Text(
+                            text = "Update device firmware via WiFi",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    
+                    Icon(
+                        imageVector = if (expanded) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown,
+                        contentDescription = if (expanded) "Collapse" else "Expand",
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+            
+            AnimatedVisibility(
+                visible = expanded,
+                enter = expandVertically(),
+                exit = shrinkVertically()
+            ) {
+                Column(
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+                    verticalArrangement = Arrangement.spacedBy(16.dp)
+                ) {
+                    HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.2f))
+                    
+                    // ========================
+                    // AUTOMATIC UPDATE SECTION
+                    // ========================
+                    
+                    // Check for Updates Button
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column {
+                            Text(
+                                text = "Current Version",
+                                style = MaterialTheme.typography.labelMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                            Text(
+                                text = deviceStatus?.build_date ?: "Unknown",
+                                style = MaterialTheme.typography.bodyMedium
+                            )
+                        }
+                        
+                        Button(
+                            onClick = onCheckForUpdates,
+                            enabled = !isCheckingForUpdates && !isDownloadingFirmware && !isUploading
+                        ) {
+                            if (isCheckingForUpdates) {
+                                CircularProgressIndicator(
+                                    modifier = Modifier.size(16.dp),
+                                    strokeWidth = 2.dp,
+                                    color = MaterialTheme.colorScheme.onPrimary
+                                )
+                                Spacer(modifier = Modifier.width(8.dp))
+                            }
+                            Text("Check for Updates")
+                        }
+                    }
+                    
+                    // Update Available Card
+                    if (updateAvailable != null) {
+                        Card(
+                            modifier = Modifier.fillMaxWidth(),
+                            colors = CardDefaults.cardColors(
+                                containerColor = MaterialTheme.colorScheme.primaryContainer
+                            )
+                        ) {
+                            Column(
+                                modifier = Modifier.padding(16.dp),
+                                verticalArrangement = Arrangement.spacedBy(12.dp)
+                            ) {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Column {
+                                        Text(
+                                            text = "Update Available!",
+                                            style = MaterialTheme.typography.titleMedium,
+                                            fontWeight = FontWeight.Bold,
+                                            color = MaterialTheme.colorScheme.onPrimaryContainer
+                                        )
+                                        Text(
+                                            text = "Version ${updateAvailable.latest_version}",
+                                            style = MaterialTheme.typography.bodyMedium,
+                                            color = MaterialTheme.colorScheme.onPrimaryContainer
+                                        )
+                                    }
+                                    
+                                    TextButton(onClick = onDismissUpdate) {
+                                        Text("Dismiss")
+                                    }
+                                }
+                                
+                                if (updateAvailable.release_notes.isNotEmpty()) {
+                                    Text(
+                                        text = updateAvailable.release_notes,
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.8f)
+                                    )
+                                }
+                                
+                                if (updateAvailable.file_size > 0) {
+                                    Text(
+                                        text = "Size: ${updateAvailable.file_size / 1024}KB",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.7f)
+                                    )
+                                }
+                                
+                                // Download progress
+                                if (isDownloadingFirmware) {
+                                    Column {
+                                        LinearProgressIndicator(
+                                            progress = { downloadProgress / 100f },
+                                            modifier = Modifier.fillMaxWidth(),
+                                        )
+                                        Text(
+                                            text = "Downloading... $downloadProgress%",
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onPrimaryContainer
+                                        )
+                                    }
+                                } else if (selectedFileName != null) {
+                                    Text(
+                                        text = "✓ Downloaded: $selectedFileName",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.primary
+                                    )
+                                }
+                                
+                                // Action buttons
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                ) {
+                                    if (selectedFileName == null && !isDownloadingFirmware) {
+                                        Button(
+                                            onClick = onDownloadAndInstall,
+                                            modifier = Modifier.weight(1f),
+                                            colors = ButtonDefaults.buttonColors(
+                                                containerColor = MaterialTheme.colorScheme.primary
+                                            )
+                                        ) {
+                                            Text("Download Update")
+                                        }
+                                    } else if (selectedFileName != null && !isUploading) {
+                                        Button(
+                                            onClick = onStartUpload,
+                                            modifier = Modifier.weight(1f),
+                                            colors = ButtonDefaults.buttonColors(
+                                                containerColor = MaterialTheme.colorScheme.primary
+                                            )
+                                        ) {
+                                            Text("Install Update")
+                                        }
+                                    }
+                                }
+                                
+                                Text(
+                                    text = "After downloading, connect to device WiFi to install.",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.7f)
+                                )
+                            }
+                        }
+                    }
+                    
+                    HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.2f))
+                    
+                    Text(
+                        text = "Manual Update",
+                        style = MaterialTheme.typography.labelLarge,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    
+                    // Step 1: WiFi Connection Info
+                    Card(
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = CardDefaults.cardColors(
+                            containerColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.3f)
+                        )
+                    ) {
+                        Column(
+                            modifier = Modifier.padding(12.dp),
+                            verticalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            Text(
+                                text = "Step 1: Connect to Device WiFi",
+                                style = MaterialTheme.typography.labelLarge,
+                                color = MaterialTheme.colorScheme.primary
+                            )
+                            
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween
+                            ) {
+                                Text(
+                                    text = "Network:",
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                                Text(
+                                    text = apName,
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    fontWeight = FontWeight.Bold
+                                )
+                            }
+                            
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween
+                            ) {
+                                Text(
+                                    text = "Password:",
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                                Text(
+                                    text = apPassword,
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    fontWeight = FontWeight.Bold
+                                )
+                            }
+                            
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween
+                            ) {
+                                Text(
+                                    text = "Device IP:",
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                                Text(
+                                    text = deviceIP,
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    fontWeight = FontWeight.Bold
+                                )
+                            }
+                            
+                            Text(
+                                text = "Open your phone's WiFi settings and connect to this network before uploading.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.8f)
+                            )
+                        }
+                    }
+                    
+                    // Step 2: Select Firmware File
+                    Card(
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = CardDefaults.cardColors(
+                            containerColor = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.3f)
+                        )
+                    ) {
+                        Column(
+                            modifier = Modifier.padding(12.dp),
+                            verticalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            Text(
+                                text = "Step 2: Select Firmware File",
+                                style = MaterialTheme.typography.labelLarge,
+                                color = MaterialTheme.colorScheme.secondary
+                            )
+                            
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Button(
+                                    onClick = onSelectFile,
+                                    enabled = !isUploading,
+                                    modifier = Modifier.weight(1f)
+                                ) {
+                                    Text(if (selectedFileName != null) "Change File" else "Select .bin File")
+                                }
+                            }
+                            
+                            if (selectedFileName != null) {
+                                Text(
+                                    text = "Selected: $selectedFileName",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.primary
+                                )
+                            }
+                        }
+                    }
+                    
+                    // Step 3: Upload
+                    if (selectedFileName != null) {
+                        Card(
+                            modifier = Modifier.fillMaxWidth(),
+                            colors = CardDefaults.cardColors(
+                                containerColor = if (isUploading) 
+                                    MaterialTheme.colorScheme.tertiaryContainer.copy(alpha = 0.3f)
+                                else 
+                                    MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f)
+                            )
+                        ) {
+                            Column(
+                                modifier = Modifier.padding(12.dp),
+                                verticalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                Text(
+                                    text = "Step 3: Upload & Install",
+                                    style = MaterialTheme.typography.labelLarge,
+                                    color = MaterialTheme.colorScheme.tertiary
+                                )
+                                
+                                if (isUploading) {
+                                    // Progress indicator
+                                    LinearProgressIndicator(
+                                        progress = { uploadProgress / 100f },
+                                        modifier = Modifier.fillMaxWidth(),
+                                    )
+                                    
+                                    Text(
+                                        text = "$uploadStatus ($uploadProgress%)",
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                    
+                                    OutlinedButton(
+                                        onClick = onCancelUpload,
+                                        modifier = Modifier.fillMaxWidth()
+                                    ) {
+                                        Text("Cancel")
+                                    }
+                                } else {
+                                    Text(
+                                        text = "Make sure you're connected to the device WiFi before uploading. The device will restart after the update.",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.8f)
+                                    )
+                                    
+                                    Button(
+                                        onClick = onStartUpload,
+                                        modifier = Modifier.fillMaxWidth(),
+                                        colors = ButtonDefaults.buttonColors(
+                                            containerColor = MaterialTheme.colorScheme.primary
+                                        )
+                                    ) {
+                                        Text("Upload & Install Firmware")
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    
+                    // Warning
+                    Card(
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = CardDefaults.cardColors(
+                            containerColor = MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.3f)
+                        )
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(12.dp),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            Icon(
+                                Icons.Default.Warning,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.error,
+                                modifier = Modifier.size(20.dp)
+                            )
+                            Text(
+                                text = "Do not disconnect power or close the app during firmware update. The device will restart automatically when complete.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onErrorContainer
+                            )
+                        }
+                    }
+                    
+                    Spacer(modifier = Modifier.height(8.dp))
+                }
+            }
+        }
+    }
 }

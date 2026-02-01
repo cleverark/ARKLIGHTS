@@ -1,5 +1,8 @@
 package com.example.arklights.ui.screens
 
+import android.net.Uri
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.expandVertically
 import androidx.compose.animation.shrinkVertically
@@ -17,6 +20,7 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.example.arklights.viewmodel.ArkLightsViewModel
@@ -62,7 +66,7 @@ fun MainControlScreen(
                 .verticalScroll(rememberScrollState())
         ) {
             when (currentPage) {
-                "main" -> MainControlsPage(viewModel = viewModel)
+                "main" -> MainControlsPage(viewModel = viewModel, onPageChange = onPageChange)
                 "settings" -> SettingsPage(viewModel = viewModel)
             }
         }
@@ -71,7 +75,8 @@ fun MainControlScreen(
 
 @Composable
 fun MainControlsPage(
-    viewModel: ArkLightsViewModel
+    viewModel: ArkLightsViewModel,
+    onPageChange: (String) -> Unit
 ) {
     val deviceStatus by viewModel.deviceStatus.collectAsState()
     val isLoading by viewModel.isLoading.collectAsState()
@@ -165,6 +170,60 @@ fun MainControlsPage(
                             color = MaterialTheme.colorScheme.onErrorContainer.copy(alpha = 0.8f)
                         )
                     }
+                }
+            }
+        }
+        
+        // Firmware Update Available Banner
+        val updateAvailable by viewModel.updateAvailable.collectAsState()
+        val mainContext = LocalContext.current
+        
+        // Initialize firmware manager and auto-check on main page too
+        LaunchedEffect(Unit) {
+            viewModel.initFirmwareUpdateManager(mainContext)
+            if (viewModel.shouldAutoCheckForUpdates()) {
+                viewModel.checkForUpdates()
+            }
+        }
+        
+        if (updateAvailable != null) {
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                colors = CardDefaults.cardColors(
+                    containerColor = MaterialTheme.colorScheme.primaryContainer
+                ),
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.5f)),
+                onClick = { onPageChange("settings") }
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(12.dp),
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = "🎉",
+                        style = MaterialTheme.typography.titleLarge
+                    )
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = "Firmware Update Available",
+                            style = MaterialTheme.typography.titleSmall,
+                            fontWeight = FontWeight.SemiBold,
+                            color = MaterialTheme.colorScheme.onPrimaryContainer
+                        )
+                        Text(
+                            text = "Version ${updateAvailable!!.latest_version} - Tap to update",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.8f)
+                        )
+                    }
+                    Icon(
+                        Icons.Default.KeyboardArrowUp,
+                        contentDescription = "Go to Settings",
+                        tint = MaterialTheme.colorScheme.primary
+                    )
                 }
             }
         }
@@ -563,6 +622,93 @@ fun SettingsPage(
                 scope.launch {
                     viewModel.testLEDs()
                 }
+            }
+        )
+        
+        // OTA Firmware Update Section
+        val context = LocalContext.current
+        val otaFileName by viewModel.otaFileName.collectAsState()
+        val otaUploading by viewModel.otaUploading.collectAsState()
+        val otaProgress by viewModel.otaProgress.collectAsState()
+        val otaStatus by viewModel.otaStatus.collectAsState()
+        
+        // Automatic update state
+        val updateAvailable by viewModel.updateAvailable.collectAsState()
+        val isCheckingForUpdates by viewModel.isCheckingForUpdates.collectAsState()
+        val isDownloadingFirmware by viewModel.isDownloadingFirmware.collectAsState()
+        val downloadProgress by viewModel.downloadProgress.collectAsState()
+        
+        // Initialize firmware update manager and auto-check
+        LaunchedEffect(Unit) {
+            viewModel.initFirmwareUpdateManager(context)
+            if (viewModel.shouldAutoCheckForUpdates()) {
+                viewModel.checkForUpdates()
+            }
+        }
+        
+        val filePicker = rememberLauncherForActivityResult(
+            contract = ActivityResultContracts.GetContent()
+        ) { uri: Uri? ->
+            uri?.let {
+                try {
+                    val inputStream = context.contentResolver.openInputStream(uri)
+                    val bytes = inputStream?.readBytes()
+                    inputStream?.close()
+                    
+                    if (bytes != null) {
+                        // Get filename from URI
+                        val cursor = context.contentResolver.query(uri, null, null, null, null)
+                        var fileName = "firmware.bin"
+                        cursor?.use {
+                            if (it.moveToFirst()) {
+                                val nameIndex = it.getColumnIndex(android.provider.OpenableColumns.DISPLAY_NAME)
+                                if (nameIndex >= 0) {
+                                    fileName = it.getString(nameIndex)
+                                }
+                            }
+                        }
+                        
+                        viewModel.setOtaFile(fileName, bytes)
+                    }
+                } catch (e: Exception) {
+                    // Handle error
+                }
+            }
+        }
+        
+        OTAUpdateSection(
+            deviceStatus = deviceStatus,
+            selectedFileName = otaFileName,
+            isUploading = otaUploading,
+            uploadProgress = otaProgress,
+            uploadStatus = otaStatus,
+            updateAvailable = updateAvailable,
+            isCheckingForUpdates = isCheckingForUpdates,
+            isDownloadingFirmware = isDownloadingFirmware,
+            downloadProgress = downloadProgress,
+            onSelectFile = {
+                filePicker.launch("application/octet-stream")
+            },
+            onStartUpload = {
+                scope.launch {
+                    viewModel.uploadFirmware()
+                }
+            },
+            onCancelUpload = {
+                viewModel.cancelOtaUpload()
+            },
+            onCheckForUpdates = {
+                scope.launch {
+                    viewModel.checkForUpdates()
+                }
+            },
+            onDownloadAndInstall = {
+                scope.launch {
+                    viewModel.downloadAndPrepareUpdate()
+                }
+            },
+            onDismissUpdate = {
+                viewModel.dismissUpdate()
             }
         )
         
