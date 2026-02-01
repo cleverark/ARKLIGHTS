@@ -76,11 +76,30 @@ jobs:
           VERSION="${{ steps.version.outputs.version }}"
           mkdir -p release
           
-          # Find and copy the built firmware
-          find .pio/build -name "*.bin" -type f | head -1 | xargs -I {} cp {} release/${FIRMWARE_NAME}-v${VERSION}.bin
+          # Find and copy the main firmware binary (not bootloader or partitions)
+          # The main firmware is always named 'firmware.bin'
+          FIRMWARE_PATH=$(find .pio/build -name "firmware.bin" -type f | head -1)
+          
+          if [ -z "$FIRMWARE_PATH" ]; then
+            echo "❌ ERROR: firmware.bin not found!"
+            echo "Available .bin files:"
+            find .pio/build -name "*.bin" -type f -exec ls -la {} \;
+            exit 1
+          fi
+          
+          echo "📦 Found firmware: $FIRMWARE_PATH"
+          cp "$FIRMWARE_PATH" release/${FIRMWARE_NAME}-v${VERSION}.bin
           
           # Get file size
           FILE_SIZE=$(stat -c%s "release/${FIRMWARE_NAME}-v${VERSION}.bin" 2>/dev/null || stat -f%z "release/${FIRMWARE_NAME}-v${VERSION}.bin")
+          
+          # Verify the firmware is a reasonable size (at least 500KB)
+          if [ "$FILE_SIZE" -lt 500000 ]; then
+            echo "❌ ERROR: Firmware is too small ($FILE_SIZE bytes). Expected at least 500KB."
+            exit 1
+          fi
+          
+          echo "✅ Firmware size: $FILE_SIZE bytes"
           
           # Create manifest.json for Android app OTA
           cat > release/manifest.json << EOF
