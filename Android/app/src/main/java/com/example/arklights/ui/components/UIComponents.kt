@@ -17,7 +17,12 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material3.*
@@ -40,12 +45,22 @@ import kotlin.math.*
 // NEW CLEANER COMPONENTS
 // ============================================
 
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
 fun QuickPresetsSection(
     currentPreset: Int?,
-    onPresetSelected: (Int) -> Unit
+    presets: List<PresetInfo>,
+    onPresetSelected: (Int) -> Unit,
+    onSavePreset: (String) -> Unit,
+    onUpdatePreset: (Int, String) -> Unit,
+    onDeletePreset: (Int) -> Unit
 ) {
+    var showSaveDialog by remember { mutableStateOf(false) }
+    var showEditDialog by remember { mutableStateOf(false) }
+    var editingPresetIndex by remember { mutableStateOf(-1) }
+    var editingPresetName by remember { mutableStateOf("") }
+    var isEditMode by remember { mutableStateOf(false) }
+    
     Card(
         modifier = Modifier.fillMaxWidth(),
         colors = CardDefaults.cardColors(
@@ -55,39 +70,232 @@ fun QuickPresetsSection(
         Column(
             modifier = Modifier.padding(16.dp)
         ) {
-            Text(
-                text = "Presets",
-                style = MaterialTheme.typography.titleSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.padding(bottom = 12.dp)
-            )
-            
+            // Header with title and edit toggle
             Row(
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
             ) {
-                Presets.presetNames.forEach { (id, name) ->
-                    val isSelected = currentPreset == id
-                    FilterChip(
-                        onClick = { onPresetSelected(id) },
-                        label = { 
-                            Text(
-                                text = name,
-                                style = MaterialTheme.typography.labelMedium
-                            ) 
-                        },
-                        selected = isSelected,
-                        colors = FilterChipDefaults.filterChipColors(
-                            selectedContainerColor = MaterialTheme.colorScheme.primary,
-                            selectedLabelColor = MaterialTheme.colorScheme.onPrimary,
-                            containerColor = MaterialTheme.colorScheme.surface
-                        ),
-                        modifier = Modifier.weight(1f)
-                    )
+                Text(
+                    text = "Presets",
+                    style = MaterialTheme.typography.titleSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(4.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    // Edit mode toggle
+                    if (presets.isNotEmpty()) {
+                        IconButton(
+                            onClick = { isEditMode = !isEditMode },
+                            modifier = Modifier.size(32.dp)
+                        ) {
+                            Icon(
+                                if (isEditMode) Icons.Default.Close else Icons.Default.Edit,
+                                contentDescription = if (isEditMode) "Done editing" else "Edit presets",
+                                tint = if (isEditMode) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.size(18.dp)
+                            )
+                        }
+                    }
+                    
+                    // Save new preset button
+                    IconButton(
+                        onClick = { showSaveDialog = true },
+                        modifier = Modifier.size(32.dp)
+                    ) {
+                        Icon(
+                            Icons.Default.Add,
+                            contentDescription = "Save current as preset",
+                            tint = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.size(20.dp)
+                        )
+                    }
+                }
+            }
+            
+            Spacer(modifier = Modifier.height(12.dp))
+            
+            // Presets grid
+            if (presets.isEmpty()) {
+                // Show message when no presets
+                Text(
+                    text = "No presets saved. Tap + to save current settings.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+                    modifier = Modifier.padding(vertical = 8.dp)
+                )
+            } else {
+                // Show presets in a flowing layout
+                Column(
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    // Show presets in rows of 3
+                    presets.chunked(3).forEach { rowPresets ->
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            rowPresets.forEachIndexed { indexInRow, preset ->
+                                val actualIndex = presets.indexOf(preset)
+                                val isSelected = currentPreset == actualIndex
+                                
+                                Box(
+                                    modifier = Modifier.weight(1f)
+                                ) {
+                                    if (isEditMode) {
+                                        // Edit mode: show edit/delete buttons
+                                        Card(
+                                            modifier = Modifier.fillMaxWidth(),
+                                            colors = CardDefaults.cardColors(
+                                                containerColor = MaterialTheme.colorScheme.surfaceVariant
+                                            )
+                                        ) {
+                                            Row(
+                                                modifier = Modifier
+                                                    .fillMaxWidth()
+                                                    .padding(4.dp),
+                                                horizontalArrangement = Arrangement.SpaceBetween,
+                                                verticalAlignment = Alignment.CenterVertically
+                                            ) {
+                                                Text(
+                                                    text = preset.name.ifEmpty { "Preset ${actualIndex + 1}" },
+                                                    style = MaterialTheme.typography.labelSmall,
+                                                    maxLines = 1,
+                                                    modifier = Modifier
+                                                        .weight(1f)
+                                                        .padding(start = 8.dp)
+                                                )
+                                                
+                                                Row {
+                                                    IconButton(
+                                                        onClick = {
+                                                            editingPresetIndex = actualIndex
+                                                            editingPresetName = preset.name
+                                                            showEditDialog = true
+                                                        },
+                                                        modifier = Modifier.size(28.dp)
+                                                    ) {
+                                                        Icon(
+                                                            Icons.Default.Edit,
+                                                            contentDescription = "Edit",
+                                                            modifier = Modifier.size(16.dp),
+                                                            tint = MaterialTheme.colorScheme.primary
+                                                        )
+                                                    }
+                                                    IconButton(
+                                                        onClick = { onDeletePreset(actualIndex) },
+                                                        modifier = Modifier.size(28.dp)
+                                                    ) {
+                                                        Icon(
+                                                            Icons.Default.Delete,
+                                                            contentDescription = "Delete",
+                                                            modifier = Modifier.size(16.dp),
+                                                            tint = MaterialTheme.colorScheme.error
+                                                        )
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    } else {
+                                        // Normal mode: selectable chips
+                                        FilterChip(
+                                            onClick = { onPresetSelected(actualIndex) },
+                                            label = { 
+                                                Text(
+                                                    text = preset.name.ifEmpty { "Preset ${actualIndex + 1}" },
+                                                    style = MaterialTheme.typography.labelMedium,
+                                                    maxLines = 1
+                                                ) 
+                                            },
+                                            selected = isSelected,
+                                            colors = FilterChipDefaults.filterChipColors(
+                                                selectedContainerColor = MaterialTheme.colorScheme.primary,
+                                                selectedLabelColor = MaterialTheme.colorScheme.onPrimary,
+                                                containerColor = MaterialTheme.colorScheme.surface
+                                            ),
+                                            modifier = Modifier.fillMaxWidth()
+                                        )
+                                    }
+                                }
+                            }
+                            
+                            // Fill empty slots in row
+                            repeat(3 - rowPresets.size) {
+                                Spacer(modifier = Modifier.weight(1f))
+                            }
+                        }
+                    }
                 }
             }
         }
     }
+    
+    // Save Preset Dialog
+    if (showSaveDialog) {
+        PresetNameDialog(
+            title = "Save Preset",
+            initialName = "",
+            onDismiss = { showSaveDialog = false },
+            onConfirm = { name ->
+                onSavePreset(name)
+                showSaveDialog = false
+            }
+        )
+    }
+    
+    // Edit Preset Dialog
+    if (showEditDialog) {
+        PresetNameDialog(
+            title = "Rename Preset",
+            initialName = editingPresetName,
+            onDismiss = { showEditDialog = false },
+            onConfirm = { name ->
+                onUpdatePreset(editingPresetIndex, name)
+                showEditDialog = false
+                isEditMode = false
+            }
+        )
+    }
+}
+
+@Composable
+private fun PresetNameDialog(
+    title: String,
+    initialName: String,
+    onDismiss: () -> Unit,
+    onConfirm: (String) -> Unit
+) {
+    var name by remember { mutableStateOf(initialName) }
+    
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(title) },
+        text = {
+            OutlinedTextField(
+                value = name,
+                onValueChange = { name = it },
+                label = { Text("Preset name") },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth()
+            )
+        },
+        confirmButton = {
+            TextButton(
+                onClick = { onConfirm(name) },
+                enabled = name.isNotBlank()
+            ) {
+                Text("Save")
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text("Cancel")
+            }
+        }
+    )
 }
 
 @Composable
@@ -456,6 +664,34 @@ fun AdvancedSettingsCard(
                 ) {
                     HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.2f))
                     
+                    // ========================
+                    // DIRECTION-BASED LIGHTING (Top priority feature)
+                    // ========================
+                    Text(
+                        text = "Direction Detection",
+                        style = MaterialTheme.typography.labelLarge,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                    
+                    // Direction-based lighting toggle
+                    CompactToggleRow(
+                        label = "Direction-Based Lighting",
+                        subtitle = "Change headlight based on travel direction",
+                        checked = deviceStatus?.direction_based_lighting ?: false,
+                        onCheckedChange = onDirectionBasedLightingEnabled
+                    )
+                    
+                    // Forward acceleration threshold
+                    CompactSliderControlDouble(
+                        label = "Forward Accel Threshold",
+                        value = deviceStatus?.forward_accel_threshold ?: 0.3,
+                        valueRange = 0.1f..1.0f,
+                        steps = 8,
+                        onValueChange = onForwardAccelThresholdChange
+                    )
+                    
+                    HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.2f))
+                    
                     // Effect Speed Slider
                     CompactSliderControl(
                         label = "Effect Speed",
@@ -514,34 +750,6 @@ fun AdvancedSettingsCard(
                         valueRange = 0.5f..2.0f,
                         steps = 14,
                         onValueChange = onMotionSensitivityChange
-                    )
-                    
-                    HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.2f))
-                    
-                    // ========================
-                    // DIRECTION-BASED LIGHTING
-                    // ========================
-                    Text(
-                        text = "Direction Detection",
-                        style = MaterialTheme.typography.labelLarge,
-                        color = MaterialTheme.colorScheme.primary
-                    )
-                    
-                    // Direction-based lighting toggle
-                    CompactToggleRow(
-                        label = "Direction-Based Lighting",
-                        subtitle = "Change headlight based on travel direction",
-                        checked = deviceStatus?.direction_based_lighting ?: false,
-                        onCheckedChange = onDirectionBasedLightingEnabled
-                    )
-                    
-                    // Forward acceleration threshold
-                    CompactSliderControlDouble(
-                        label = "Forward Accel Threshold",
-                        value = deviceStatus?.forward_accel_threshold ?: 0.3,
-                        valueRange = 0.1f..1.0f,
-                        steps = 8,
-                        onValueChange = onForwardAccelThresholdChange
                     )
                     
                     HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.2f))

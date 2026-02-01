@@ -6,11 +6,13 @@ import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -127,12 +129,68 @@ fun MainControlsPage(
             }
         }
         
+        // Calibration Warning Banner - Show if device not calibrated
+        val status = deviceStatus
+        if (status != null && !status.calibration_complete && !status.calibration_mode) {
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                colors = CardDefaults.cardColors(
+                    containerColor = MaterialTheme.colorScheme.errorContainer
+                ),
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.error.copy(alpha = 0.5f))
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(12.dp),
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Icon(
+                        Icons.Default.Warning,
+                        contentDescription = "Warning",
+                        tint = MaterialTheme.colorScheme.error,
+                        modifier = Modifier.size(24.dp)
+                    )
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = "IMU Not Calibrated",
+                            style = MaterialTheme.typography.titleSmall,
+                            fontWeight = FontWeight.SemiBold,
+                            color = MaterialTheme.colorScheme.onErrorContainer
+                        )
+                        Text(
+                            text = "Direction and motion features require calibration. Go to Settings to calibrate.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onErrorContainer.copy(alpha = 0.8f)
+                        )
+                    }
+                }
+            }
+        }
+        
         // Quick Presets - Prominent at the top
         QuickPresetsSection(
             currentPreset = deviceStatus?.preset,
+            presets = deviceStatus?.presets ?: emptyList(),
             onPresetSelected = { preset ->
                 scope.launch {
                     viewModel.setPreset(preset)
+                }
+            },
+            onSavePreset = { name ->
+                scope.launch {
+                    viewModel.savePreset(name)
+                }
+            },
+            onUpdatePreset = { index, name ->
+                scope.launch {
+                    viewModel.updatePreset(index, name)
+                }
+            },
+            onDeletePreset = { index ->
+                scope.launch {
+                    viewModel.deletePreset(index)
                 }
             }
         )
