@@ -1,6 +1,6 @@
 ---
 name: Feature request
-about: Suggest an improvement idea for WLED!
+about: Suggest an improvement idea for ArkLights!
 title: ''
 labels: enhancement
 assignees: ''
@@ -13,10 +13,16 @@ A clear and concise description of what the problem is. Ex. I'm always frustrate
 **Describe the solution you'd like**
 A clear and concise description of what you want to happen.
 
+**Which part of ArkLights does this affect?**
+- [ ] Firmware (LED effects, sensors, etc.)
+- [ ] Android App
+- [ ] Web Interface
+- [ ] Other
+
 **Describe alternatives you've considered**
 A clear and concise description of any alternative solutions or features you've considered.
 
 **Additional context**
 Add any other context or screenshots about the feature request here.
 
-Thank you for your ideas for making WLED better!
+Thank you for your ideas for making ArkLights better! 🚀

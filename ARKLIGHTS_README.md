@@ -4,21 +4,19 @@ A clean, focused LED lighting system designed specifically for Personal Electric
 
 ## Project Structure
 
-This project has been reorganized to focus on the ArkLights implementation:
-
 ```
-ARKLIGHTS_WLED/
+ARKLIGHTS/
 ├── src/
-│   └── main.cpp                    # ArkLights implementation
-├── platformio_simple.ini          # Simple build configuration
-├── platformio_arklights.ini        # Full ArkLights configuration
-├── ARKLIGHTS_README.md             # This documentation
-├── LICENSE                         # Project license
-└── legacy/                         # Legacy reference files (preserved)
-    └── ...                         # Reference files
+│   └── main.cpp                    # Firmware implementation
+├── Android/                        # Android companion app
+│   └── app/src/main/java/...       # Kotlin/Compose app
+├── ui/                             # Web interface
+├── boards/                         # Custom board definitions
+├── partitions/                     # Flash partition tables
+├── firmware/                       # Release manifests
+├── platformio.ini                  # Build configuration
+└── .github/workflows/              # CI/CD for releases
 ```
-
-The `legacy/` folder contains reference files, while the root directory contains only the ArkLights-specific implementation.
 
 ## Features
 

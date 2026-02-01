@@ -15,6 +15,14 @@ Thumbs.db
 *.tmp
 *.log
 
-# Keep legacy folder clean but don't ignore it
-!legacy/
-!legacy/**
+# Android build outputs
+Android/app/build/
+Android/build/
+Android/.gradle/
+*.apk
+*.aab
+
+# Secrets - never commit these
+*.keystore
+*.jks
+local.properties
