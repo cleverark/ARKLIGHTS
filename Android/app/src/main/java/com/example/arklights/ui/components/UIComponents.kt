@@ -20,6 +20,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
@@ -2493,6 +2494,17 @@ fun OTAUpdateSection(
     val apPassword = deviceStatus?.apPassword ?: "float420"
     val deviceIP = "192.168.4.1" // Default AP IP for ESP32
     
+    // Keep screen awake during upload or download
+    val activity = androidx.compose.ui.platform.LocalContext.current as? android.app.Activity
+    androidx.compose.runtime.DisposableEffect(isUploading, isDownloadingFirmware) {
+        if (isUploading || isDownloadingFirmware) {
+            activity?.window?.addFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        }
+        onDispose {
+            activity?.window?.clearFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        }
+    }
+    
     Card(
         modifier = Modifier.fillMaxWidth(),
         colors = CardDefaults.cardColors(
@@ -2635,7 +2647,7 @@ fun OTAUpdateSection(
                                     )
                                 }
                                 
-                                // Download progress
+                                // Download progress or status
                                 if (isDownloadingFirmware) {
                                     Column {
                                         LinearProgressIndicator(
@@ -2649,46 +2661,41 @@ fun OTAUpdateSection(
                                         )
                                     }
                                 } else if (selectedFileName != null) {
+                                    // File downloaded - show status and point to Step 3
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(4.dp)
+                                    ) {
+                                        Icon(
+                                            Icons.Default.Check,
+                                            contentDescription = null,
+                                            tint = MaterialTheme.colorScheme.primary,
+                                            modifier = Modifier.size(16.dp)
+                                        )
+                                        Text(
+                                            text = "Downloaded: $selectedFileName",
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.primary
+                                        )
+                                    }
                                     Text(
-                                        text = "✓ Downloaded: $selectedFileName",
+                                        text = "→ Connect to device WiFi, then use 'Upload & Install' in Step 3 below",
                                         style = MaterialTheme.typography.bodySmall,
-                                        color = MaterialTheme.colorScheme.primary
+                                        fontWeight = FontWeight.Medium,
+                                        color = MaterialTheme.colorScheme.onPrimaryContainer
                                     )
-                                }
-                                
-                                // Action buttons
-                                Row(
-                                    modifier = Modifier.fillMaxWidth(),
-                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                                ) {
-                                    if (selectedFileName == null && !isDownloadingFirmware) {
-                                        Button(
-                                            onClick = onDownloadAndInstall,
-                                            modifier = Modifier.weight(1f),
-                                            colors = ButtonDefaults.buttonColors(
-                                                containerColor = MaterialTheme.colorScheme.primary
-                                            )
-                                        ) {
-                                            Text("Download Update")
-                                        }
-                                    } else if (selectedFileName != null && !isUploading) {
-                                        Button(
-                                            onClick = onStartUpload,
-                                            modifier = Modifier.weight(1f),
-                                            colors = ButtonDefaults.buttonColors(
-                                                containerColor = MaterialTheme.colorScheme.primary
-                                            )
-                                        ) {
-                                            Text("Install Update")
-                                        }
+                                } else {
+                                    // No file yet - show download button
+                                    Button(
+                                        onClick = onDownloadAndInstall,
+                                        modifier = Modifier.fillMaxWidth(),
+                                        colors = ButtonDefaults.buttonColors(
+                                            containerColor = MaterialTheme.colorScheme.primary
+                                        )
+                                    ) {
+                                        Text("⬇ Download Update")
                                     }
                                 }
-                                
-                                Text(
-                                    text = "After downloading, connect to device WiFi to install.",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.7f)
-                                )
                             }
                         }
                     }

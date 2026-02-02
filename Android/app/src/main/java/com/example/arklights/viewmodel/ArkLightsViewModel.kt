@@ -166,6 +166,18 @@ class ArkLightsViewModel(
                 presets = resolvedPresets,
                 presetCount = resolvedPresetCount
             )
+            
+            // Check if current firmware version matches the available update and clear banner
+            val currentFirmwareVersion = forcedStatus.firmware_version
+            val availableUpdate = _updateAvailable.value
+            if (availableUpdate != null && currentFirmwareVersion.isNotEmpty()) {
+                val manager = firmwareUpdateManager
+                if (manager != null && !manager.isUpdateAvailable(currentFirmwareVersion, availableUpdate.latest_version)) {
+                    // Current version is same or newer, clear the update banner
+                    _updateAvailable.value = null
+                }
+            }
+            
             if (forcedStatus.calibration_mode) {
                 startCalibrationRefreshIfNeeded()
             } else {
@@ -700,6 +712,8 @@ class ArkLightsViewModel(
                 _otaProgress.value = 100
                 // Clear file after successful upload
                 clearOtaFile()
+                // Clear update available banner since we just updated
+                _updateAvailable.value = null
             } else {
                 // Get error from API service
                 val error = apiService.lastError.value ?: "Upload failed"
