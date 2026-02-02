@@ -2562,7 +2562,7 @@ fun OTAUpdateSection(
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
                             Text(
-                                text = deviceStatus?.build_date ?: "Unknown",
+                                text = deviceStatus?.firmware_version?.ifEmpty { "Unknown" } ?: "Unknown",
                                 style = MaterialTheme.typography.bodyMedium
                             )
                         }
