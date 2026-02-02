@@ -740,10 +740,10 @@ class ArkLightsViewModel(
     suspend fun checkForUpdates() {
         val manager = firmwareUpdateManager ?: return
         val currentVersion = _deviceStatus.value?.let { 
-            // Extract version from firmware_version or build_date
-            it.build_date.takeIf { date -> date.isNotEmpty() } 
-                ?: "v8.0"  // Default fallback
-        }
+            // Use firmware_version from device, with fallback
+            it.firmware_version.takeIf { v -> v.isNotEmpty() } 
+                ?: "v0.0.0"  // Default fallback if not set
+        } ?: "v0.0.0"
         
         _isCheckingForUpdates.value = true
         

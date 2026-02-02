@@ -2024,6 +2024,7 @@ fun DeviceStatusDebugSection(deviceStatus: LEDStatus?) {
                         StatusRow("Brightness", "${deviceStatus.brightness}")
                         StatusRow("Effect Speed", "${deviceStatus.effectSpeed}")
                         StatusRow("Device Name", deviceStatus.deviceName)
+                        StatusRow("Firmware Version", deviceStatus.firmware_version.ifEmpty { "Unknown" })
                         StatusRow("Build Date", deviceStatus.build_date)
                         
                         Spacer(modifier = Modifier.height(8.dp))

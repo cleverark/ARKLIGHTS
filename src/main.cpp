@@ -6694,7 +6694,7 @@ void buildStatusDocument(DynamicJsonDocument& doc) {
     doc["ota_error"] = otaError;
     doc["ota_file_name"] = otaFileName;
     doc["ota_file_size"] = otaFileSize;
-    doc["firmware_version"] = "v8.0 OTA";
+    doc["firmware_version"] = "v0.0.0-dev";  // Updated by CI during release builds
     doc["build_date"] = __DATE__ " " __TIME__;
     doc["apName"] = apName;
     doc["apPassword"] = apPassword;

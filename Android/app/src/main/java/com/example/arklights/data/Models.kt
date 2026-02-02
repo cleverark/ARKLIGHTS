@@ -302,7 +302,8 @@ data class LEDStatus(
     val ota_progress: Int = 0,
     val ota_error: String? = null,
     val ota_in_progress: Boolean = false,
-    val build_date: String = ""
+    val build_date: String = "",
+    val firmware_version: String = ""
 )
 
 @Serializable
