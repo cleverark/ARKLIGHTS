@@ -61,14 +61,12 @@ struct CRGBW {
 // Configuration for XIAO ESP32S3
 #define HEADLIGHT_PIN 2
 #define TAILLIGHT_PIN 3
-#define HEADLIGHT_CLOCK_PIN 5  // For APA102/LPD8806
-#define TAILLIGHT_CLOCK_PIN 4  // For APA102/LPD8806
 #define DEFAULT_BRIGHTNESS 128
 
 // LED Configuration (can be changed via web UI)
 uint8_t headlightLedCount = 11;
 uint8_t taillightLedCount = 11;
-uint8_t headlightLedType = 0;  // 0=SK6812 RGBW, 1=SK6812 RGB, 2=WS2812B, 3=APA102, 4=LPD8806
+uint8_t headlightLedType = 0;  // 0=SK6812 RGBW, 1=SK6812 RGB, 2=WS2812B
 uint8_t taillightLedType = 0;
 uint8_t headlightColorOrder = 1;  // 0=RGB, 1=GRB, 2=BGR - Default to GRB for SK6812 RGBW
 uint8_t taillightColorOrder = 1;  // 0=RGB, 1=GRB, 2=BGR - Default to GRB for SK6812 RGBW
@@ -6983,16 +6981,6 @@ void initializeLEDs() {
             else if (headlightColorOrder == 1) headlightController = &FastLED.addLeds<WS2812B, HEADLIGHT_PIN, GRB>(headlight, headlightLedCount);
             else if (headlightColorOrder == 2) headlightController = &FastLED.addLeds<WS2812B, HEADLIGHT_PIN, BGR>(headlight, headlightLedCount);
             break;
-        case 3: // APA102
-            if (headlightColorOrder == 0) headlightController = &FastLED.addLeds<APA102, HEADLIGHT_PIN, HEADLIGHT_CLOCK_PIN, RGB>(headlight, headlightLedCount);
-            else if (headlightColorOrder == 1) headlightController = &FastLED.addLeds<APA102, HEADLIGHT_PIN, HEADLIGHT_CLOCK_PIN, GRB>(headlight, headlightLedCount);
-            else headlightController = &FastLED.addLeds<APA102, HEADLIGHT_PIN, HEADLIGHT_CLOCK_PIN, BGR>(headlight, headlightLedCount);
-            break;
-        case 4: // LPD8806
-            if (headlightColorOrder == 0) headlightController = &FastLED.addLeds<LPD8806, HEADLIGHT_PIN, HEADLIGHT_CLOCK_PIN, RGB>(headlight, headlightLedCount);
-            else if (headlightColorOrder == 1) headlightController = &FastLED.addLeds<LPD8806, HEADLIGHT_PIN, HEADLIGHT_CLOCK_PIN, GRB>(headlight, headlightLedCount);
-            else headlightController = &FastLED.addLeds<LPD8806, HEADLIGHT_PIN, HEADLIGHT_CLOCK_PIN, BGR>(headlight, headlightLedCount);
-            break;
     }
     
     switch (taillightLedType) {
@@ -7014,16 +7002,6 @@ void initializeLEDs() {
             if (taillightColorOrder == 0) taillightController = &FastLED.addLeds<WS2812B, TAILLIGHT_PIN, RGB>(taillight, taillightLedCount);
             else if (taillightColorOrder == 1) taillightController = &FastLED.addLeds<WS2812B, TAILLIGHT_PIN, GRB>(taillight, taillightLedCount);
             else if (taillightColorOrder == 2) taillightController = &FastLED.addLeds<WS2812B, TAILLIGHT_PIN, BGR>(taillight, taillightLedCount);
-            break;
-        case 3: // APA102
-            if (taillightColorOrder == 0) taillightController = &FastLED.addLeds<APA102, TAILLIGHT_PIN, TAILLIGHT_CLOCK_PIN, RGB>(taillight, taillightLedCount);
-            else if (taillightColorOrder == 1) taillightController = &FastLED.addLeds<APA102, TAILLIGHT_PIN, TAILLIGHT_CLOCK_PIN, GRB>(taillight, taillightLedCount);
-            else taillightController = &FastLED.addLeds<APA102, TAILLIGHT_PIN, TAILLIGHT_CLOCK_PIN, BGR>(taillight, taillightLedCount);
-            break;
-        case 4: // LPD8806
-            if (taillightColorOrder == 0) taillightController = &FastLED.addLeds<LPD8806, TAILLIGHT_PIN, TAILLIGHT_CLOCK_PIN, RGB>(taillight, taillightLedCount);
-            else if (taillightColorOrder == 1) taillightController = &FastLED.addLeds<LPD8806, TAILLIGHT_PIN, TAILLIGHT_CLOCK_PIN, GRB>(taillight, taillightLedCount);
-            else taillightController = &FastLED.addLeds<LPD8806, TAILLIGHT_PIN, TAILLIGHT_CLOCK_PIN, BGR>(taillight, taillightLedCount);
             break;
     }
 
@@ -7100,8 +7078,6 @@ String getLEDTypeName(uint8_t type) {
         case 0: return "SK6812 RGBW";
         case 1: return "SK6812 RGB";
         case 2: return "WS2812B";
-        case 3: return "APA102";
-        case 4: return "LPD8806";
         default: return "Unknown";
     }
 }

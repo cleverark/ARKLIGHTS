@@ -39,6 +39,7 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import com.example.arklights.data.*
 import androidx.compose.material3.ExperimentalMaterial3Api
 import kotlin.math.*
@@ -1895,11 +1896,143 @@ fun WiFiConfigurationSection(
     onAPPasswordChange: (String) -> Unit,
     onApplyWiFiConfig: (String, String) -> Unit
 ) {
-    Card(modifier = Modifier.fillMaxWidth()) {
-        Column(modifier = Modifier.padding(16.dp)) {
-            Text("WiFi Configuration", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
-            Spacer(modifier = Modifier.height(8.dp))
-            Text("WiFi configuration settings...")
+    var expanded by remember { mutableStateOf(false) }
+    var apName by remember { mutableStateOf("") }
+    var apPassword by remember { mutableStateOf("") }
+    
+    LaunchedEffect(deviceStatus) {
+        deviceStatus?.let {
+            apName = it.apName
+            apPassword = it.apPassword
+        }
+    }
+    
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+    ) {
+        Column(modifier = Modifier.fillMaxWidth()) {
+            // Header
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable { expanded = !expanded }
+                    .padding(16.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        "📶 WiFi Configuration",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Text(
+                        "Access Point settings",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                Icon(
+                    imageVector = if (expanded) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown,
+                    contentDescription = if (expanded) "Collapse" else "Expand"
+                )
+            }
+            
+            // Content
+            AnimatedVisibility(
+                visible = expanded,
+                enter = expandVertically(),
+                exit = shrinkVertically()
+            ) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp)
+                        .padding(bottom = 16.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    // Current Status
+                    Surface(
+                        modifier = Modifier.fillMaxWidth(),
+                        color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.3f),
+                        shape = RoundedCornerShape(8.dp)
+                    ) {
+                        Column(
+                            modifier = Modifier.padding(12.dp),
+                            verticalArrangement = Arrangement.spacedBy(4.dp)
+                        ) {
+                            Text(
+                                "Current AP Settings",
+                                style = MaterialTheme.typography.labelMedium,
+                                fontWeight = FontWeight.Bold
+                            )
+                            Text(
+                                "SSID: ${deviceStatus?.apName ?: "Loading..."}",
+                                style = MaterialTheme.typography.bodySmall
+                            )
+                            Text(
+                                "Password: ${deviceStatus?.apPassword ?: "Loading..."}",
+                                style = MaterialTheme.typography.bodySmall
+                            )
+                        }
+                    }
+                    
+                    // AP Name Input
+                    OutlinedTextField(
+                        value = apName,
+                        onValueChange = { apName = it },
+                        label = { Text("Access Point Name") },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true,
+                        placeholder = { Text("ARKLIGHTS-XXXXXX") }
+                    )
+                    
+                    // AP Password Input
+                    OutlinedTextField(
+                        value = apPassword,
+                        onValueChange = { apPassword = it },
+                        label = { Text("Access Point Password") },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true,
+                        placeholder = { Text("Minimum 8 characters") }
+                    )
+                    
+                    // Warning
+                    Surface(
+                        modifier = Modifier.fillMaxWidth(),
+                        color = Color(0xFFFFC107).copy(alpha = 0.15f),
+                        shape = RoundedCornerShape(8.dp)
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(12.dp),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            verticalAlignment = Alignment.Top
+                        ) {
+                            Icon(
+                                Icons.Default.Warning,
+                                contentDescription = null,
+                                tint = Color(0xFFFFC107),
+                                modifier = Modifier.size(20.dp)
+                            )
+                            Text(
+                                "Changing WiFi settings will disconnect you and require reconnection with new credentials.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurface
+                            )
+                        }
+                    }
+                    
+                    // Apply Button
+                    Button(
+                        onClick = { onApplyWiFiConfig(apName, apPassword) },
+                        modifier = Modifier.fillMaxWidth(),
+                        enabled = apName.isNotBlank() && apPassword.length >= 8
+                    ) {
+                        Text("Apply WiFi Configuration")
+                    }
+                }
+            }
         }
     }
 }
@@ -1911,11 +2044,209 @@ fun ESPNowConfigurationSection(
     onESPNowSync: (Boolean) -> Unit,
     onESPNowChannelChange: (Int) -> Unit
 ) {
-    Card(modifier = Modifier.fillMaxWidth()) {
-        Column(modifier = Modifier.padding(16.dp)) {
-            Text("ESPNow Configuration", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
-            Spacer(modifier = Modifier.height(8.dp))
-            Text("ESPNow configuration settings...")
+    var expanded by remember { mutableStateOf(false) }
+    var showAdvanced by remember { mutableStateOf(false) }
+    
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+    ) {
+        Column(modifier = Modifier.fillMaxWidth()) {
+            // Header
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable { expanded = !expanded }
+                    .padding(16.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        "📡 ESPNow Sync",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Text(
+                        "Device-to-device communication",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                Icon(
+                    imageVector = if (expanded) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown,
+                    contentDescription = if (expanded) "Collapse" else "Expand"
+                )
+            }
+            
+            // Content
+            AnimatedVisibility(
+                visible = expanded,
+                enter = expandVertically(),
+                exit = shrinkVertically()
+            ) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp)
+                        .padding(bottom = 16.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    // Enable ESPNow
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable { onESPNowEnabled(!(deviceStatus?.enableESPNow ?: false)) },
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                "Enable ESPNow",
+                                style = MaterialTheme.typography.bodyLarge,
+                                fontWeight = FontWeight.SemiBold
+                            )
+                            Text(
+                                "Enable device-to-device sync for group rides",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                        Switch(
+                            checked = deviceStatus?.enableESPNow ?: false,
+                            onCheckedChange = onESPNowEnabled
+                        )
+                    }
+                    
+                    // Enable Effect Sync
+                    AnimatedVisibility(visible = deviceStatus?.enableESPNow == true) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable { onESPNowSync(!(deviceStatus?.useESPNowSync ?: false)) },
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    "Enable Effect Sync",
+                                    style = MaterialTheme.typography.bodyLarge,
+                                    fontWeight = FontWeight.SemiBold
+                                )
+                                Text(
+                                    "Sync effects with group master (motion effects remain local)",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                            Switch(
+                                checked = deviceStatus?.useESPNowSync ?: false,
+                                onCheckedChange = onESPNowSync
+                            )
+                        }
+                    }
+                    
+                    // Status Info
+                    AnimatedVisibility(visible = deviceStatus?.enableESPNow == true) {
+                        Surface(
+                            modifier = Modifier.fillMaxWidth(),
+                            color = MaterialTheme.colorScheme.surfaceVariant,
+                            shape = RoundedCornerShape(8.dp)
+                        ) {
+                            Column(
+                                modifier = Modifier.padding(12.dp),
+                                verticalArrangement = Arrangement.spacedBy(4.dp)
+                            ) {
+                                Text(
+                                    "ESPNow Status",
+                                    style = MaterialTheme.typography.labelMedium,
+                                    fontWeight = FontWeight.Bold
+                                )
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween
+                                ) {
+                                    Text(
+                                        "Status:",
+                                        style = MaterialTheme.typography.bodySmall
+                                    )
+                                    Text(
+                                        deviceStatus?.espNowStatus ?: "Unknown",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        fontWeight = FontWeight.SemiBold
+                                    )
+                                }
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween
+                                ) {
+                                    Text(
+                                        "Peers:",
+                                        style = MaterialTheme.typography.bodySmall
+                                    )
+                                    Text(
+                                        "${deviceStatus?.espNowPeerCount ?: 0}",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        fontWeight = FontWeight.SemiBold
+                                    )
+                                }
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween
+                                ) {
+                                    Text(
+                                        "Last Send:",
+                                        style = MaterialTheme.typography.bodySmall
+                                    )
+                                    Text(
+                                        deviceStatus?.espNowLastSend ?: "Never",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        fontWeight = FontWeight.SemiBold
+                                    )
+                                }
+                            }
+                        }
+                    }
+                    
+                    // Advanced Settings
+                    AnimatedVisibility(visible = deviceStatus?.enableESPNow == true) {
+                        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                            TextButton(
+                                onClick = { showAdvanced = !showAdvanced },
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Text(if (showAdvanced) "Hide Advanced Settings" else "Show Advanced Settings")
+                                Icon(
+                                    imageVector = if (showAdvanced) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(16.dp)
+                                )
+                            }
+                            
+                            AnimatedVisibility(visible = showAdvanced) {
+                                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                    Text(
+                                        "ESPNow Channel: ${deviceStatus?.espNowChannel ?: 1}",
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        fontWeight = FontWeight.SemiBold
+                                    )
+                                    Slider(
+                                        value = (deviceStatus?.espNowChannel ?: 1).toFloat(),
+                                        onValueChange = { onESPNowChannelChange(it.toInt()) },
+                                        valueRange = 1f..14f,
+                                        steps = 12
+                                    )
+                                    Text(
+                                        "All devices must use the same channel",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            }
         }
     }
 }
@@ -1930,11 +2261,253 @@ fun GroupManagementSection(
     onAllowGroupJoin: () -> Unit,
     onBlockGroupJoin: () -> Unit
 ) {
-    Card(modifier = Modifier.fillMaxWidth()) {
-        Column(modifier = Modifier.padding(16.dp)) {
-            Text("Group Management", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
-            Spacer(modifier = Modifier.height(8.dp))
-            Text("Group management settings...")
+    var expanded by remember { mutableStateOf(false) }
+    var deviceName by remember { mutableStateOf("") }
+    var groupCode by remember { mutableStateOf("") }
+    
+    LaunchedEffect(deviceStatus) {
+        deviceStatus?.let {
+            deviceName = it.deviceName
+        }
+    }
+    
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+    ) {
+        Column(modifier = Modifier.fillMaxWidth()) {
+            // Header
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable { expanded = !expanded }
+                    .padding(16.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        "🚴 Group Ride Management",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Text(
+                        "Sync with other riders",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                Icon(
+                    imageVector = if (expanded) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown,
+                    contentDescription = if (expanded) "Collapse" else "Expand"
+                )
+            }
+            
+            // Content
+            AnimatedVisibility(
+                visible = expanded,
+                enter = expandVertically(),
+                exit = shrinkVertically()
+            ) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp)
+                        .padding(bottom = 16.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    // Device Name
+                    OutlinedTextField(
+                        value = deviceName,
+                        onValueChange = { 
+                            deviceName = it
+                            if (it.length <= 20) {
+                                onDeviceNameChange(it)
+                            }
+                        },
+                        label = { Text("Device Name") },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true,
+                        placeholder = { Text("My Board") },
+                        supportingText = { Text("Name shown to other group members (${deviceName.length}/20)") }
+                    )
+                    
+                    // Group Status
+                    Surface(
+                        modifier = Modifier.fillMaxWidth(),
+                        color = if (deviceStatus?.groupCode?.isNotEmpty() == true) {
+                            MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.3f)
+                        } else {
+                            MaterialTheme.colorScheme.surfaceVariant
+                        },
+                        shape = RoundedCornerShape(8.dp)
+                    ) {
+                        Column(
+                            modifier = Modifier.padding(12.dp),
+                            verticalArrangement = Arrangement.spacedBy(4.dp)
+                        ) {
+                            Text(
+                                "Group Status",
+                                style = MaterialTheme.typography.labelMedium,
+                                fontWeight = FontWeight.Bold
+                            )
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween
+                            ) {
+                                Text("Status:", style = MaterialTheme.typography.bodySmall)
+                                Text(
+                                    if (deviceStatus?.groupCode?.isNotEmpty() == true) "In Group" else "Not in Group",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = if (deviceStatus?.groupCode?.isNotEmpty() == true) {
+                                        MaterialTheme.colorScheme.primary
+                                    } else {
+                                        MaterialTheme.colorScheme.onSurfaceVariant
+                                    }
+                                )
+                            }
+                            if (deviceStatus?.groupCode?.isNotEmpty() == true) {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween
+                                ) {
+                                    Text("Group Code:", style = MaterialTheme.typography.bodySmall)
+                                    Text(
+                                        deviceStatus.groupCode,
+                                        style = MaterialTheme.typography.bodySmall,
+                                        fontWeight = FontWeight.SemiBold
+                                    )
+                                }
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween
+                                ) {
+                                    Text("Role:", style = MaterialTheme.typography.bodySmall)
+                                    Text(
+                                        if (deviceStatus.isGroupMaster) "Master" else "Follower",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        fontWeight = FontWeight.SemiBold
+                                    )
+                                }
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween
+                                ) {
+                                    Text("Members:", style = MaterialTheme.typography.bodySmall)
+                                    Text(
+                                        "${deviceStatus.groupMemberCount}",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        fontWeight = FontWeight.SemiBold
+                                    )
+                                }
+                            }
+                        }
+                    }
+                    
+                    // Group Code Input (for joining)
+                    if (deviceStatus?.groupCode?.isEmpty() == true) {
+                        OutlinedTextField(
+                            value = groupCode,
+                            onValueChange = { 
+                                if (it.length <= 6 && it.all { char -> char.isDigit() }) {
+                                    groupCode = it
+                                }
+                            },
+                            label = { Text("Group Code (Optional)") },
+                            modifier = Modifier.fillMaxWidth(),
+                            singleLine = true,
+                            placeholder = { Text("6-digit code") },
+                            supportingText = { Text("Leave empty to auto-generate when creating") }
+                        )
+                    }
+                    
+                    // Action Buttons
+                    if (deviceStatus?.groupCode?.isEmpty() == true) {
+                        // Not in group - show create/join buttons
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            Button(
+                                onClick = { onCreateGroup(groupCode.ifEmpty { "" }) },
+                                modifier = Modifier.weight(1f)
+                            ) {
+                                Text("Create Group")
+                            }
+                            OutlinedButton(
+                                onClick = { 
+                                    if (groupCode.length == 6) {
+                                        onJoinGroup(groupCode)
+                                    }
+                                },
+                                modifier = Modifier.weight(1f),
+                                enabled = groupCode.length == 6
+                            ) {
+                                Text("Join Group")
+                            }
+                        }
+                        Text(
+                            "Create generates a code automatically. Enter a 6-digit code to join an existing group.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    } else {
+                        // In group - show leave button
+                        Button(
+                            onClick = onLeaveGroup,
+                            modifier = Modifier.fillMaxWidth(),
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = MaterialTheme.colorScheme.error
+                            )
+                        ) {
+                            Text("Leave Group")
+                        }
+                        
+                        // Master controls
+                        if (deviceStatus?.isGroupMaster == true) {
+                            Surface(
+                                modifier = Modifier.fillMaxWidth(),
+                                color = MaterialTheme.colorScheme.tertiaryContainer.copy(alpha = 0.3f),
+                                shape = RoundedCornerShape(8.dp)
+                            ) {
+                                Column(
+                                    modifier = Modifier.padding(12.dp),
+                                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                                ) {
+                                    Text(
+                                        "Master Controls",
+                                        style = MaterialTheme.typography.labelMedium,
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                    ) {
+                                        OutlinedButton(
+                                            onClick = onAllowGroupJoin,
+                                            modifier = Modifier.weight(1f)
+                                        ) {
+                                            Text("Allow Joins", fontSize = 12.sp)
+                                        }
+                                        OutlinedButton(
+                                            onClick = onBlockGroupJoin,
+                                            modifier = Modifier.weight(1f)
+                                        ) {
+                                            Text("Block Joins", fontSize = 12.sp)
+                                        }
+                                    }
+                                    Text(
+                                        "Joins are allowed by default",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            }
         }
     }
 }
@@ -1950,6 +2523,327 @@ fun LEDConfigurationSection(
             Text("LED Configuration", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
             Spacer(modifier = Modifier.height(8.dp))
             Button(onClick = onTestLEDs) { Text("Test LEDs") }
+        }
+    }
+}
+
+// ============================================
+// LED HARDWARE CONFIGURATION SECTION
+// ============================================
+
+@Composable
+fun LEDHardwareConfigSection(
+    deviceStatus: LEDStatus?,
+    onHeadlightConfigChange: (ledCount: Int, ledType: Int, colorOrder: Int) -> Unit,
+    onTaillightConfigChange: (ledCount: Int, ledType: Int, colorOrder: Int) -> Unit
+) {
+    var expanded by remember { mutableStateOf(false) }
+    var showHeadlightCustom by remember { mutableStateOf(false) }
+    var showTaillightCustom by remember { mutableStateOf(false) }
+    var customHeadlightCount by remember { mutableStateOf("20") }
+    var customTaillightCount by remember { mutableStateOf("20") }
+    var customHeadlightType by remember { mutableStateOf(0) }
+    var customTaillightType by remember { mutableStateOf(0) }
+    
+    // Determine current presets based on device status
+    val currentHeadlightPreset = deviceStatus?.let {
+        LEDPresets.getPresetByConfig(it.headlightLedCount, it.headlightLedType)?.id ?: "custom"
+    } ?: "gt_xr"
+    
+    val currentTaillightPreset = deviceStatus?.let {
+        LEDPresets.getPresetByConfig(it.taillightLedCount, it.taillightLedType)?.id ?: "custom"
+    } ?: "gt_xr"
+    
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surface
+        ),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.2f))
+    ) {
+        Column {
+            // Header
+            Surface(
+                onClick = { expanded = !expanded },
+                color = Color.Transparent
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(16.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column {
+                        Text(
+                            text = "LED Hardware",
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.Bold
+                        )
+                        Text(
+                            text = "Configure LED type and count",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    Icon(
+                        imageVector = if (expanded) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown,
+                        contentDescription = if (expanded) "Collapse" else "Expand"
+                    )
+                }
+            }
+            
+            // Content
+            AnimatedVisibility(
+                visible = expanded,
+                enter = expandVertically(),
+                exit = shrinkVertically()
+            ) {
+                Column(
+                    modifier = Modifier.padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(16.dp)
+                ) {
+                    // Current Configuration Display
+                    if (deviceStatus != null) {
+                        Card(
+                            modifier = Modifier.fillMaxWidth(),
+                            colors = CardDefaults.cardColors(
+                                containerColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.3f)
+                            )
+                        ) {
+                            Column(modifier = Modifier.padding(12.dp)) {
+                                Text(
+                                    text = "Current Configuration",
+                                    style = MaterialTheme.typography.labelMedium,
+                                    color = MaterialTheme.colorScheme.primary
+                                )
+                                Spacer(modifier = Modifier.height(4.dp))
+                                Text(
+                                    text = "Headlight: ${deviceStatus.headlightLedCount} LEDs (${if (deviceStatus.headlightLedType == 0) "RGBW" else "RGB"})",
+                                    style = MaterialTheme.typography.bodyMedium
+                                )
+                                Text(
+                                    text = "Taillight: ${deviceStatus.taillightLedCount} LEDs (${if (deviceStatus.taillightLedType == 0) "RGBW" else "RGB"})",
+                                    style = MaterialTheme.typography.bodyMedium
+                                )
+                            }
+                        }
+                    }
+                    
+                    // Headlight Configuration
+                    Text(
+                        text = "Headlight LED Type",
+                        style = MaterialTheme.typography.labelLarge,
+                        fontWeight = FontWeight.Medium
+                    )
+                    
+                    LEDPresets.presets.forEach { preset ->
+                        val isSelected = currentHeadlightPreset == preset.id
+                        Surface(
+                            onClick = {
+                                if (preset.id == "custom") {
+                                    showHeadlightCustom = true
+                                } else {
+                                    showHeadlightCustom = false
+                                    onHeadlightConfigChange(preset.ledCount, preset.ledType, preset.colorOrder)
+                                }
+                            },
+                            color = if (isSelected) MaterialTheme.colorScheme.primaryContainer else Color.Transparent,
+                            shape = RoundedCornerShape(8.dp),
+                            border = BorderStroke(
+                                1.dp, 
+                                if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline.copy(alpha = 0.3f)
+                            )
+                        ) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(12.dp),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Column {
+                                    Text(
+                                        text = preset.name,
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal
+                                    )
+                                    Text(
+                                        text = preset.description,
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                                if (isSelected && preset.id != "custom") {
+                                    Icon(
+                                        Icons.Default.Check,
+                                        contentDescription = "Selected",
+                                        tint = MaterialTheme.colorScheme.primary
+                                    )
+                                }
+                            }
+                        }
+                    }
+                    
+                    // Custom Headlight Config
+                    if (showHeadlightCustom || currentHeadlightPreset == "custom") {
+                        Card(
+                            modifier = Modifier.fillMaxWidth(),
+                            colors = CardDefaults.cardColors(
+                                containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+                            )
+                        ) {
+                            Column(
+                                modifier = Modifier.padding(12.dp),
+                                verticalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                OutlinedTextField(
+                                    value = customHeadlightCount,
+                                    onValueChange = { customHeadlightCount = it.filter { c -> c.isDigit() } },
+                                    label = { Text("LED Count") },
+                                    modifier = Modifier.fillMaxWidth(),
+                                    singleLine = true
+                                )
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                ) {
+                                    FilterChip(
+                                        selected = customHeadlightType == 0,
+                                        onClick = { customHeadlightType = 0 },
+                                        label = { Text("RGBW") }
+                                    )
+                                    FilterChip(
+                                        selected = customHeadlightType == 1,
+                                        onClick = { customHeadlightType = 1 },
+                                        label = { Text("RGB") }
+                                    )
+                                }
+                                Button(
+                                    onClick = {
+                                        val count = customHeadlightCount.toIntOrNull() ?: 20
+                                        onHeadlightConfigChange(count, customHeadlightType, LEDPresets.COLOR_ORDER_GRB)
+                                    },
+                                    modifier = Modifier.fillMaxWidth()
+                                ) {
+                                    Text("Apply Headlight Config")
+                                }
+                            }
+                        }
+                    }
+                    
+                    HorizontalDivider()
+                    
+                    // Taillight Configuration
+                    Text(
+                        text = "Taillight LED Type",
+                        style = MaterialTheme.typography.labelLarge,
+                        fontWeight = FontWeight.Medium
+                    )
+                    
+                    LEDPresets.presets.forEach { preset ->
+                        val isSelected = currentTaillightPreset == preset.id
+                        Surface(
+                            onClick = {
+                                if (preset.id == "custom") {
+                                    showTaillightCustom = true
+                                } else {
+                                    showTaillightCustom = false
+                                    onTaillightConfigChange(preset.ledCount, preset.ledType, preset.colorOrder)
+                                }
+                            },
+                            color = if (isSelected) MaterialTheme.colorScheme.primaryContainer else Color.Transparent,
+                            shape = RoundedCornerShape(8.dp),
+                            border = BorderStroke(
+                                1.dp, 
+                                if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline.copy(alpha = 0.3f)
+                            )
+                        ) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(12.dp),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Column {
+                                    Text(
+                                        text = preset.name,
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal
+                                    )
+                                    Text(
+                                        text = preset.description,
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                                if (isSelected && preset.id != "custom") {
+                                    Icon(
+                                        Icons.Default.Check,
+                                        contentDescription = "Selected",
+                                        tint = MaterialTheme.colorScheme.primary
+                                    )
+                                }
+                            }
+                        }
+                    }
+                    
+                    // Custom Taillight Config
+                    if (showTaillightCustom || currentTaillightPreset == "custom") {
+                        Card(
+                            modifier = Modifier.fillMaxWidth(),
+                            colors = CardDefaults.cardColors(
+                                containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+                            )
+                        ) {
+                            Column(
+                                modifier = Modifier.padding(12.dp),
+                                verticalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                OutlinedTextField(
+                                    value = customTaillightCount,
+                                    onValueChange = { customTaillightCount = it.filter { c -> c.isDigit() } },
+                                    label = { Text("LED Count") },
+                                    modifier = Modifier.fillMaxWidth(),
+                                    singleLine = true
+                                )
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                ) {
+                                    FilterChip(
+                                        selected = customTaillightType == 0,
+                                        onClick = { customTaillightType = 0 },
+                                        label = { Text("RGBW") }
+                                    )
+                                    FilterChip(
+                                        selected = customTaillightType == 1,
+                                        onClick = { customTaillightType = 1 },
+                                        label = { Text("RGB") }
+                                    )
+                                }
+                                Button(
+                                    onClick = {
+                                        val count = customTaillightCount.toIntOrNull() ?: 20
+                                        onTaillightConfigChange(count, customTaillightType, LEDPresets.COLOR_ORDER_GRB)
+                                    },
+                                    modifier = Modifier.fillMaxWidth()
+                                ) {
+                                    Text("Apply Taillight Config")
+                                }
+                            }
+                        }
+                    }
+                    
+                    // Note
+                    Text(
+                        text = "Note: Changing LED configuration requires a device restart to take effect.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
+                    )
+                }
+            }
         }
     }
 }

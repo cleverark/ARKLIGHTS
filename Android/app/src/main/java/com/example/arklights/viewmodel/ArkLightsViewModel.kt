@@ -269,6 +269,34 @@ class ArkLightsViewModel(
         refreshStatus()
     }
     
+    suspend fun setHeadlightLedConfig(ledCount: Int, ledType: Int, colorOrder: Int) {
+        val currentStatus = _deviceStatus.value ?: return
+        val config = LEDConfigRequest(
+            headlightLedCount = ledCount,
+            taillightLedCount = currentStatus.taillightLedCount,
+            headlightLedType = ledType,
+            taillightLedType = currentStatus.taillightLedType,
+            headlightColorOrder = colorOrder,
+            taillightColorOrder = currentStatus.taillightColorOrder
+        )
+        apiService.updateLEDConfig(config)
+        refreshStatus()
+    }
+    
+    suspend fun setTaillightLedConfig(ledCount: Int, ledType: Int, colorOrder: Int) {
+        val currentStatus = _deviceStatus.value ?: return
+        val config = LEDConfigRequest(
+            headlightLedCount = currentStatus.headlightLedCount,
+            taillightLedCount = ledCount,
+            headlightLedType = currentStatus.headlightLedType,
+            taillightLedType = ledType,
+            headlightColorOrder = currentStatus.headlightColorOrder,
+            taillightColorOrder = colorOrder
+        )
+        apiService.updateLEDConfig(config)
+        refreshStatus()
+    }
+    
     suspend fun setTaillightEffect(effect: Int) {
         apiService.setTaillightEffect(effect)
         refreshStatus()

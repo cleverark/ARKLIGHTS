@@ -52,33 +52,37 @@
                 <div class="control-group">
                     <label>Effect:</label>
                     <select id="headlightEffect" onchange="setHeadlightEffect(this.value)">
-                        <optgroup label="Popular">
+                        <optgroup label="Essential">
                             <option value="0">Solid</option>
                             <option value="1">Breath</option>
                             <option value="2">Rainbow</option>
+                            <option value="3">Pulse</option>
+                        </optgroup>
+                        <optgroup label="Motion Effects">
                             <option value="8">Wave</option>
                             <option value="16">Color Wipe</option>
                             <option value="23">Rainbow Wipe</option>
-                            <option value="12">Knight Rider</option>
+                            <option value="5">Gradient Shift</option>
+                            <option value="9">Center Burst</option>
                         </optgroup>
-                        <optgroup label="Other effects">
-                            <option value="3">Chase</option>
+                        <optgroup label="Scanner Effects">
+                            <option value="12">Knight Rider</option>
+                            <option value="15">Larson Scanner</option>
+                            <option value="20">Rainbow Knight Rider</option>
+                            <option value="21">Dual Knight Rider</option>
+                            <option value="22">Dual Rainbow Knight Rider</option>
+                        </optgroup>
+                        <optgroup label="Other">
                             <option value="4">Blink Rainbow</option>
-                            <option value="5">Twinkle</option>
                             <option value="6">Fire</option>
                             <option value="7">Meteor</option>
-                            <option value="9">Comet</option>
                             <option value="10">Candle</option>
                             <option value="11">Static Rainbow</option>
                             <option value="13">Police</option>
                             <option value="14">Strobe</option>
-                            <option value="15">Larson Scanner</option>
-                            <option value="17">Theater Chase</option>
+                            <option value="17">Hazard</option>
                             <option value="18">Running Lights</option>
                             <option value="19">Color Sweep</option>
-                            <option value="20">Rainbow Knight Rider</option>
-                            <option value="21">Dual Knight Rider</option>
-                            <option value="22">Dual Rainbow Knight Rider</option>
                         </optgroup>
                     </select>
                 </div>
@@ -111,33 +115,37 @@
                 <div class="control-group">
                     <label>Effect:</label>
                     <select id="taillightEffect" onchange="setTaillightEffect(this.value)">
-                        <optgroup label="Popular">
+                        <optgroup label="Essential">
                             <option value="0">Solid</option>
                             <option value="1">Breath</option>
                             <option value="2">Rainbow</option>
+                            <option value="3">Pulse</option>
+                        </optgroup>
+                        <optgroup label="Motion Effects">
                             <option value="8">Wave</option>
                             <option value="16">Color Wipe</option>
                             <option value="23">Rainbow Wipe</option>
-                            <option value="12">Knight Rider</option>
+                            <option value="5">Gradient Shift</option>
+                            <option value="9">Center Burst</option>
                         </optgroup>
-                        <optgroup label="Other effects">
-                            <option value="3">Chase</option>
+                        <optgroup label="Scanner Effects">
+                            <option value="12">Knight Rider</option>
+                            <option value="15">Larson Scanner</option>
+                            <option value="20">Rainbow Knight Rider</option>
+                            <option value="21">Dual Knight Rider</option>
+                            <option value="22">Dual Rainbow Knight Rider</option>
+                        </optgroup>
+                        <optgroup label="Other">
                             <option value="4">Blink Rainbow</option>
-                            <option value="5">Twinkle</option>
                             <option value="6">Fire</option>
                             <option value="7">Meteor</option>
-                            <option value="9">Comet</option>
                             <option value="10">Candle</option>
                             <option value="11">Static Rainbow</option>
                             <option value="13">Police</option>
                             <option value="14">Strobe</option>
-                            <option value="15">Larson Scanner</option>
-                            <option value="17">Theater Chase</option>
+                            <option value="17">Hazard</option>
                             <option value="18">Running Lights</option>
                             <option value="19">Color Sweep</option>
-                            <option value="20">Rainbow Knight Rider</option>
-                            <option value="21">Dual Knight Rider</option>
-                            <option value="22">Dual Rainbow Knight Rider</option>
                         </optgroup>
                     </select>
                 </div>
@@ -231,18 +239,6 @@
                     <small>Brightness of braking effect</small>
                 </div>
 
-                <div class="control-group">
-                    <h4 style="margin: 10px 0 6px;">Manual Signals</h4>
-                    <div style="display: flex; flex-wrap: wrap; gap: 8px;">
-                        <button onclick="setManualBlinker('left')" class="btn btn-secondary">Left Blinker</button>
-                        <button onclick="setManualBlinker('right')" class="btn btn-secondary">Right Blinker</button>
-                        <button onclick="setManualBlinker('off')" class="btn btn-danger">Blinker Off</button>
-                        <button onclick="setManualBrake(true)" class="btn btn-warning">Brake On</button>
-                        <button onclick="setManualBrake(false)" class="btn btn-secondary">Brake Off</button>
-                    </div>
-                    <small>Manual overrides for testing or remote triggers</small>
-                </div>
-                
                 <h3>Park Mode</h3>
                 <div class="control-group">
                     <label>
@@ -250,22 +246,6 @@
                         Park Mode
                     </label>
                     <small>Special effects when stationary and tilted (configure in Settings)</small>
-                </div>
-
-                <h3>Advanced</h3>
-                <div class="control-group">
-                    <label>
-                        <input type="checkbox" id="whiteLEDsEnabled" onchange="setWhiteLEDsEnabled(this.checked)">
-                        White LEDs (Dedicated)
-                    </label>
-                    <small>Control dedicated white LEDs via MOSFET</small>
-                </div>
-                
-                <div class="control-group">
-                    <label>Motion Sensitivity: <span id="motionSensitivityValue">1.0</span></label>
-                    <input type="range" id="motionSensitivity" min="0.5" max="2.0" step="0.1" 
-                           oninput="setMotionSensitivity(this.value)">
-                    <small>Higher values = more sensitive to motion</small>
                 </div>
             </div>
             
@@ -424,6 +404,13 @@
                 <h2>🎯 Advanced Motion Control</h2>
                 
                 <div class="control-group">
+                    <label>Motion Sensitivity: <span id="motionSensitivityValue">1.0</span></label>
+                    <input type="range" id="motionSensitivity" min="0.5" max="2.0" step="0.1" 
+                           oninput="setMotionSensitivity(this.value)">
+                    <small>Higher values = more sensitive to motion</small>
+                </div>
+                
+                <div class="control-group">
                     <label>Blinker Delay: <span id="blinkerDelayValue">300</span>ms</label>
                     <input type="range" id="blinkerDelay" min="100" max="1000" step="50" 
                            oninput="setBlinkerDelay(this.value)">
@@ -467,34 +454,75 @@
             </div>
             
             <div class="section">
+                <h2>🎮 Manual Controls</h2>
+                <p style="color: var(--muted); margin-bottom: 12px;">Manual overrides for testing or remote triggers</p>
+                
+                <div class="control-group">
+                    <label style="font-weight: 600; margin-bottom: 8px;">Turn Signals</label>
+                    <div style="display: flex; flex-wrap: wrap; gap: 8px;">
+                        <button onclick="setManualBlinker('left')" class="btn btn-secondary">← Left</button>
+                        <button onclick="setManualBlinker('right')" class="btn btn-secondary">Right →</button>
+                        <button onclick="setManualBlinker('off')" class="btn btn-danger">Off</button>
+                    </div>
+                </div>
+                
+                <div class="control-group">
+                    <label style="font-weight: 600; margin-bottom: 8px;">Brake Light</label>
+                    <div style="display: flex; flex-wrap: wrap; gap: 8px;">
+                        <button onclick="setManualBrake(true)" class="btn btn-warning">🛑 Brake On</button>
+                        <button onclick="setManualBrake(false)" class="btn btn-secondary">Brake Off</button>
+                    </div>
+                </div>
+            </div>
+            
+            <div class="section">
+                <h2>💡 White LED Control</h2>
+                <div class="control-group">
+                    <label>
+                        <input type="checkbox" id="whiteLEDsEnabled" onchange="setWhiteLEDsEnabled(this.checked)">
+                        Enable Dedicated White LEDs
+                    </label>
+                    <small>Control dedicated white LEDs via MOSFET (if your board has them)</small>
+                </div>
+            </div>
+            
+            <div class="section">
                 <h2>🅿️ Park Mode Settings</h2>
             <div class="control-group">
                 <label>Park Effect:</label>
                 <select id="parkEffect" onchange="setParkEffect(this.value)">
-                    <option value="0">Solid</option>
-                    <option value="1">Breath</option>
-                    <option value="2">Rainbow</option>
-                    <option value="3">Chase</option>
-                    <option value="4">Blink Rainbow</option>
-                    <option value="5">Twinkle</option>
-                    <option value="6">Fire</option>
-                    <option value="7">Meteor</option>
-                    <option value="8">Wave</option>
-                    <option value="9">Comet</option>
-                    <option value="10">Candle</option>
-                    <option value="11">Static Rainbow</option>
-                    <option value="12">Knight Rider</option>
-                    <option value="13">Police</option>
-                    <option value="14">Strobe</option>
-                    <option value="15">Larson Scanner</option>
-                    <option value="16">Color Wipe</option>
-                    <option value="23">Rainbow Wipe</option>
-                    <option value="17">Theater Chase</option>
-                    <option value="18">Running Lights</option>
-                    <option value="19">Color Sweep</option>
-                    <option value="20">Rainbow Knight Rider</option>
-                    <option value="21">Dual Knight Rider</option>
-                    <option value="22">Dual Rainbow Knight Rider</option>
+                    <optgroup label="Essential">
+                        <option value="0">Solid</option>
+                        <option value="1">Breath</option>
+                        <option value="2">Rainbow</option>
+                        <option value="3">Pulse</option>
+                    </optgroup>
+                    <optgroup label="Motion Effects">
+                        <option value="8">Wave</option>
+                        <option value="16">Color Wipe</option>
+                        <option value="23">Rainbow Wipe</option>
+                        <option value="5">Gradient Shift</option>
+                        <option value="9">Center Burst</option>
+                    </optgroup>
+                    <optgroup label="Scanner Effects">
+                        <option value="12">Knight Rider</option>
+                        <option value="15">Larson Scanner</option>
+                        <option value="20">Rainbow Knight Rider</option>
+                        <option value="21">Dual Knight Rider</option>
+                        <option value="22">Dual Rainbow Knight Rider</option>
+                    </optgroup>
+                    <optgroup label="Other">
+                        <option value="4">Blink Rainbow</option>
+                        <option value="6">Fire</option>
+                        <option value="7">Meteor</option>
+                        <option value="10">Candle</option>
+                        <option value="11">Static Rainbow</option>
+                        <option value="13">Police</option>
+                        <option value="14">Strobe</option>
+                        <option value="17">Hazard</option>
+                        <option value="18">Running Lights</option>
+                        <option value="19">Color Sweep</option>
+                    </optgroup>
                 </select>
                 <small>Effect to display when in park mode</small>
             </div>
@@ -596,57 +624,92 @@
         
         
             <div class="section">
-                <h2>LED Configuration</h2>
-            <div class="control-group">
-                <label>Headlight LED Count:</label>
-                <input type="number" id="headlightLedCount" min="1" max="200" value="20" onchange="updateLEDConfig()">
+                <h2>LED Hardware</h2>
+                <p style="color: var(--muted); margin-bottom: 16px;">Configure LED type and count for your board</p>
+                
+                <!-- Current Configuration Display -->
+                <div style="background: rgba(90, 212, 122, 0.1); padding: 12px; border-radius: 8px; border: 1px solid rgba(90, 212, 122, 0.3); margin-bottom: 16px;">
+                    <div style="font-weight: 600; margin-bottom: 6px;">Current Configuration</div>
+                    <div style="font-size: 14px; color: var(--muted);">
+                        <div>Headlight: <span id="currentHeadlightConfig">Loading...</span></div>
+                        <div>Taillight: <span id="currentTaillightConfig">Loading...</span></div>
+                    </div>
+                </div>
+                
+                <!-- Headlight Presets -->
+                <div class="control-group">
+                    <label style="font-size: 16px; margin-bottom: 8px;">Headlight LED Type</label>
+                    <div style="display: grid; gap: 8px;">
+                        <button class="led-preset-btn" onclick="applyLEDPreset('headlight', 'gt_xr')">
+                            <strong>GT / GTX / XR Classic</strong>
+                            <small>11 RGBW LEDs</small>
+                        </button>
+                        <button class="led-preset-btn" onclick="applyLEDPreset('headlight', 'pint')">
+                            <strong>Pint / PintX / PintS</strong>
+                            <small>13 RGBW LEDs</small>
+                        </button>
+                        <button class="led-preset-btn" onclick="applyLEDPreset('headlight', 'arklight')">
+                            <strong>ARKLight LED</strong>
+                            <small>20 RGB LEDs</small>
+                        </button>
+                        <button class="led-preset-btn" onclick="toggleCustomConfig('headlight')">
+                            <strong>Custom</strong>
+                            <small>Set your own LED count and type</small>
+                        </button>
+                    </div>
+                    
+                    <!-- Custom Headlight Config -->
+                    <div id="customHeadlightConfig" style="display: none; margin-top: 12px; padding: 12px; background: var(--surface-2); border-radius: 8px;">
+                        <input type="number" id="customHeadlightCount" min="1" max="200" value="20" placeholder="LED Count" style="margin-bottom: 8px;">
+                        <select id="customHeadlightType" style="margin-bottom: 8px;">
+                            <option value="0">SK6812 (RGBW)</option>
+                            <option value="1">SK6812 (RGB)</option>
+                            <option value="2">WS2812B (RGB)</option>
+                        </select>
+                        <button onclick="applyCustomLEDConfig('headlight')" class="btn btn-primary">Apply Headlight Config</button>
+                    </div>
+                </div>
+                
+                <hr style="border: none; border-top: 1px solid var(--border); margin: 16px 0;">
+                
+                <!-- Taillight Presets -->
+                <div class="control-group">
+                    <label style="font-size: 16px; margin-bottom: 8px;">Taillight LED Type</label>
+                    <div style="display: grid; gap: 8px;">
+                        <button class="led-preset-btn" onclick="applyLEDPreset('taillight', 'gt_xr')">
+                            <strong>GT / GTX / XR Classic</strong>
+                            <small>11 RGBW LEDs</small>
+                        </button>
+                        <button class="led-preset-btn" onclick="applyLEDPreset('taillight', 'pint')">
+                            <strong>Pint / PintX / PintS</strong>
+                            <small>13 RGBW LEDs</small>
+                        </button>
+                        <button class="led-preset-btn" onclick="applyLEDPreset('taillight', 'arklight')">
+                            <strong>ARKLight LED</strong>
+                            <small>20 RGB LEDs</small>
+                        </button>
+                        <button class="led-preset-btn" onclick="applyLEDPreset('taillight', 'custom')">
+                            <strong>Custom</strong>
+                            <small>Set your own LED count and type</small>
+                        </button>
+                    </div>
+                    
+                    <!-- Custom Taillight Config -->
+                    <div id="customTaillightConfig" style="display: none; margin-top: 12px; padding: 12px; background: var(--surface-2); border-radius: 8px;">
+                        <input type="number" id="customTaillightCount" min="1" max="200" value="20" placeholder="LED Count" style="margin-bottom: 8px;">
+                        <select id="customTaillightType" style="margin-bottom: 8px;">
+                            <option value="0">SK6812 (RGBW)</option>
+                            <option value="1">SK6812 (RGB)</option>
+                            <option value="2">WS2812B (RGB)</option>
+                        </select>
+                        <button onclick="applyCustomLEDConfig('taillight')" class="btn btn-primary">Apply Taillight Config</button>
+                    </div>
+                </div>
+                
+                <div style="margin-top: 16px; padding: 10px; background: rgba(255, 193, 7, 0.1); border-radius: 8px; border: 1px solid rgba(255, 193, 7, 0.3);">
+                    <small>⚠️ Changing LED configuration requires a device restart to take effect.</small>
+                </div>
             </div>
-            <div class="control-group">
-                <label>Taillight LED Count:</label>
-                <input type="number" id="taillightLedCount" min="1" max="200" value="20" onchange="updateLEDConfig()">
-            </div>
-            <div class="control-group">
-                <label>Headlight LED Type:</label>
-                <select id="headlightLedType" onchange="updateLEDConfig()">
-                    <option value="0">SK6812 (RGBW)</option>
-                    <option value="1">SK6812 (RGB)</option>
-                    <option value="2">WS2812B (RGB)</option>
-                    <option value="3">APA102 (RGB)</option>
-                    <option value="4">LPD8806 (RGB)</option>
-                </select>
-            </div>
-            <div class="control-group">
-                <label>Taillight LED Type:</label>
-                <select id="taillightLedType" onchange="updateLEDConfig()">
-                    <option value="0">SK6812 (RGBW)</option>
-                    <option value="1">SK6812 (RGB)</option>
-                    <option value="2">WS2812B (RGB)</option>
-                    <option value="3">APA102 (RGB)</option>
-                    <option value="4">LPD8806 (RGB)</option>
-                </select>
-            </div>
-            <div class="control-group">
-                <label>Headlight Color Order:</label>
-                <select id="headlightColorOrder" onchange="updateLEDConfig()">
-                    <option value="0">RGB</option>
-                    <option value="1">GRB</option>
-                    <option value="2">BGR</option>
-                </select>
-            </div>
-            <div class="control-group">
-                <label>Taillight Color Order:</label>
-                <select id="taillightColorOrder" onchange="updateLEDConfig()">
-                    <option value="0">RGB</option>
-                    <option value="1">GRB</option>
-                    <option value="2">BGR</option>
-                </select>
-            </div>
-            <div class="control-group">
-                <button onclick="testLEDs()" style="background: #ff9800;">Test LEDs (Red→Green→Blue→White)</button>
-                <button onclick="saveLEDConfig()" style="background: #4CAF50;">Save Configuration</button>
-                <button onclick="viewSettings()" style="background: #2196F3;">View Configuration</button>
-            </div>
-        </div>
         
             <div class="section" style="background: rgba(244, 67, 54, 0.1); border: 1px solid rgba(244, 67, 54, 0.3);">
                 <h2>Restore Defaults</h2>

@@ -2,6 +2,77 @@ package com.example.arklights.data
 
 import kotlinx.serialization.Serializable
 
+// LED Hardware Presets for different PEV boards
+object LEDPresets {
+    // LED Types: 0=SK6812 RGBW, 1=SK6812 RGB, 2=WS2812B
+    const val LED_TYPE_SK6812_RGBW = 0
+    const val LED_TYPE_SK6812_RGB = 1
+    const val LED_TYPE_WS2812B = 2
+    
+    // Color Orders: 0=RGB, 1=GRB, 2=BGR
+    const val COLOR_ORDER_RGB = 0
+    const val COLOR_ORDER_GRB = 1
+    const val COLOR_ORDER_BGR = 2
+    
+    data class LEDPreset(
+        val id: String,
+        val name: String,
+        val description: String,
+        val ledCount: Int,
+        val ledType: Int,
+        val colorOrder: Int,
+        val hasWhiteChannel: Boolean
+    )
+    
+    val presets = listOf(
+        LEDPreset(
+            id = "gt_xr",
+            name = "GT / GTX / XR Classic",
+            description = "11 RGBW LEDs",
+            ledCount = 11,
+            ledType = LED_TYPE_SK6812_RGBW,
+            colorOrder = COLOR_ORDER_GRB,
+            hasWhiteChannel = true
+        ),
+        LEDPreset(
+            id = "pint",
+            name = "Pint / PintX / PintS",
+            description = "13 RGBW LEDs",
+            ledCount = 13,
+            ledType = LED_TYPE_SK6812_RGBW,
+            colorOrder = COLOR_ORDER_GRB,
+            hasWhiteChannel = true
+        ),
+        LEDPreset(
+            id = "arklight",
+            name = "ARKLight LED",
+            description = "20 RGB LEDs",
+            ledCount = 20,
+            ledType = LED_TYPE_SK6812_RGB,
+            colorOrder = COLOR_ORDER_GRB,
+            hasWhiteChannel = false
+        ),
+        LEDPreset(
+            id = "custom",
+            name = "Custom",
+            description = "Set your own LED count and type",
+            ledCount = 0,  // User-defined
+            ledType = 0,
+            colorOrder = COLOR_ORDER_GRB,
+            hasWhiteChannel = true
+        )
+    )
+    
+    fun getPresetById(id: String) = presets.find { it.id == id }
+    
+    fun getPresetByConfig(ledCount: Int, ledType: Int): LEDPreset? {
+        // Try to match existing preset
+        return presets.find { 
+            it.id != "custom" && it.ledCount == ledCount && it.ledType == ledType 
+        }
+    }
+}
+
 // LED Effect IDs (matching the C++ definitions)
 // PEV-friendly effects optimized for personal electric vehicles
 object LEDEffects {

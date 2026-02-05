@@ -446,6 +446,21 @@ fun SettingsPage(
         // Motion Status
         MotionStatusSection(deviceStatus = deviceStatus)
         
+        // LED Hardware Configuration
+        LEDHardwareConfigSection(
+            deviceStatus = deviceStatus,
+            onHeadlightConfigChange = { ledCount, ledType, colorOrder ->
+                scope.launch {
+                    viewModel.setHeadlightLedConfig(ledCount, ledType, colorOrder)
+                }
+            },
+            onTaillightConfigChange = { ledCount, ledType, colorOrder ->
+                scope.launch {
+                    viewModel.setTaillightLedConfig(ledCount, ledType, colorOrder)
+                }
+            }
+        )
+        
         // Startup Sequence Section
         StartupSequenceSection(
             deviceStatus = deviceStatus,

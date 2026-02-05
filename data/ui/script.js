@@ -751,24 +751,22 @@ function updateStatus() {
                 devicePresets = data.presets;
                 renderPresets();
             }
+            // Update status with cleaner format
+            const statusIndicator = (active) => active ? '🟢' : '⚫';
             document.getElementById('status').innerHTML = 
-                `Preset: ${data.preset}<br>` +
-                `Brightness: ${data.brightness}<br>` +
-                `Effect Speed: ${data.effectSpeed}<br>` +
-                `Startup: ${data.startup_sequence_name} (${data.startup_duration}ms)<br>` +
-                `Motion: ${data.motion_enabled ? 'Enabled' : 'Disabled'}<br>` +
-                `Direction-Based: ${data.direction_based_lighting ? 'Enabled' : 'Disabled'}<br>` +
-                `Direction: ${data.is_moving_forward ? 'Forward' : 'Backward'}<br>` +
-                `Headlight Mode: ${data.headlight_mode == 0 ? 'Solid White' : 'Effect'}<br>` +
-                `Blinker: ${data.blinker_active ? (data.blinker_direction > 0 ? 'Right' : 'Left') : 'Inactive'}<br>` +
-                `Park Mode: ${data.park_mode_active ? 'Active' : 'Inactive'}<br>` +
-                `Braking: ${data.braking_active ? 'Active' : 'Inactive'}<br>` +
-                `Calibration: ${data.calibration_complete ? 'Complete' : 'Not calibrated'}<br>` +
-                `WiFi AP: ${data.apName}<br>` +
-                `Headlight: Effect ${data.headlightEffect}, Color #${data.headlightColor}<br>` +
-                `Taillight: Effect ${data.taillightEffect}, Color #${data.taillightColor}<br>` +
-                `Headlight Config: ${data.headlightLedCount} LEDs, Type ${data.headlightLedType}, Order ${data.headlightColorOrder}<br>` +
-                `Taillight Config: ${data.taillightLedCount} LEDs, Type ${data.taillightLedType}, Order ${data.taillightColorOrder}`;
+                `<div style="display: grid; gap: 8px;">` +
+                `<div>${statusIndicator(data.motion_enabled)} <strong>Motion:</strong> ${data.motion_enabled ? 'Enabled' : 'Disabled'}</div>` +
+                `<div>${statusIndicator(data.blinker_active)} <strong>Blinker:</strong> ${data.blinker_active ? (data.blinker_direction > 0 ? 'Right ➡️' : 'Left ⬅️') : 'Inactive'}</div>` +
+                `<div>${statusIndicator(data.park_mode_active)} <strong>Park Mode:</strong> ${data.park_mode_active ? 'Active' : 'Inactive'}</div>` +
+                `<div>${statusIndicator(data.braking_active)} <strong>Braking:</strong> ${data.braking_active ? 'Active 🛑' : 'Inactive'}</div>` +
+                `<div>${statusIndicator(data.calibration_complete)} <strong>Calibration:</strong> ${data.calibration_complete ? 'Complete' : 'Not calibrated'}</div>` +
+                `<div style="margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--border);">` +
+                `<strong>Direction:</strong> ${data.is_moving_forward ? '⬆️ Forward' : '⬇️ Backward'}<br>` +
+                `<strong>Preset:</strong> ${data.preset}<br>` +
+                `<strong>Brightness:</strong> ${data.brightness}<br>` +
+                `<strong>WiFi:</strong> ${data.apName}` +
+                `</div>` +
+                `</div>`;
 
             // Update UI elements
             // Update elements that exist, with null checks
@@ -1066,32 +1064,138 @@ function updateStatus() {
             const taillightEffectEl = document.getElementById('taillightEffect');
             if (taillightEffectEl) taillightEffectEl.value = data.taillightEffect;
             
-            // Update LED configuration elements (with null checks and explicit type conversion)
-            const headlightLedCountEl = document.getElementById('headlightLedCount');
-            if (headlightLedCountEl && data.headlightLedCount !== undefined) {
-                headlightLedCountEl.value = parseInt(data.headlightLedCount) || 0;
+            // Update LED configuration display
+            const currentHeadlightConfigEl = document.getElementById('currentHeadlightConfig');
+            if (currentHeadlightConfigEl && data.headlightLedCount !== undefined) {
+                const hlType = data.headlightLedType === 0 ? 'RGBW' : 'RGB';
+                currentHeadlightConfigEl.textContent = `${data.headlightLedCount} LEDs (${hlType})`;
             }
-            const taillightLedCountEl = document.getElementById('taillightLedCount');
-            if (taillightLedCountEl && data.taillightLedCount !== undefined) {
-                taillightLedCountEl.value = parseInt(data.taillightLedCount) || 0;
+            const currentTaillightConfigEl = document.getElementById('currentTaillightConfig');
+            if (currentTaillightConfigEl && data.taillightLedCount !== undefined) {
+                const tlType = data.taillightLedType === 0 ? 'RGBW' : 'RGB';
+                currentTaillightConfigEl.textContent = `${data.taillightLedCount} LEDs (${tlType})`;
             }
-            const headlightLedTypeEl = document.getElementById('headlightLedType');
-            if (headlightLedTypeEl && data.headlightLedType !== undefined) {
-                headlightLedTypeEl.value = parseInt(data.headlightLedType) || 0;
+            
+            // Update custom config inputs (with null checks)
+            const customHeadlightCountEl = document.getElementById('customHeadlightCount');
+            if (customHeadlightCountEl && data.headlightLedCount !== undefined) {
+                customHeadlightCountEl.value = parseInt(data.headlightLedCount) || 20;
             }
-            const taillightLedTypeEl = document.getElementById('taillightLedType');
-            if (taillightLedTypeEl && data.taillightLedType !== undefined) {
-                taillightLedTypeEl.value = parseInt(data.taillightLedType) || 0;
+            const customTaillightCountEl = document.getElementById('customTaillightCount');
+            if (customTaillightCountEl && data.taillightLedCount !== undefined) {
+                customTaillightCountEl.value = parseInt(data.taillightLedCount) || 20;
             }
-            const headlightColorOrderEl = document.getElementById('headlightColorOrder');
-            if (headlightColorOrderEl && data.headlightColorOrder !== undefined) {
-                headlightColorOrderEl.value = parseInt(data.headlightColorOrder) || 0;
+            const customHeadlightTypeEl = document.getElementById('customHeadlightType');
+            if (customHeadlightTypeEl && data.headlightLedType !== undefined) {
+                customHeadlightTypeEl.value = parseInt(data.headlightLedType) || 0;
             }
-            const taillightColorOrderEl = document.getElementById('taillightColorOrder');
-            if (taillightColorOrderEl && data.taillightColorOrder !== undefined) {
-                taillightColorOrderEl.value = parseInt(data.taillightColorOrder) || 0;
+            const customTaillightTypeEl = document.getElementById('customTaillightType');
+            if (customTaillightTypeEl && data.taillightLedType !== undefined) {
+                customTaillightTypeEl.value = parseInt(data.taillightLedType) || 0;
             }
         });
+}
+
+// LED Preset configurations
+const LED_PRESETS = {
+    gt_xr: { name: 'GT/GTX/XR Classic', count: 11, type: 0, order: 1 },
+    pint: { name: 'Pint/PintX/PintS', count: 13, type: 0, order: 1 },
+    arklight: { name: 'ARKLight LED', count: 20, type: 1, order: 1 }
+};
+
+function applyLEDPreset(light, presetId) {
+    if (presetId === 'custom') {
+        // Show custom config panel
+        const customDiv = document.getElementById(`custom${light === 'headlight' ? 'Headlight' : 'Taillight'}Config`);
+        if (customDiv) {
+            customDiv.style.display = customDiv.style.display === 'none' ? 'block' : 'none';
+        }
+        return;
+    }
+    
+    const preset = LED_PRESETS[presetId];
+    if (!preset) return;
+    
+    // Get current config
+    const currentStatus = lastStatusCache || {};
+    
+    // Build new config based on which light we're updating
+    const config = {
+        headlightLedCount: light === 'headlight' ? preset.count : (currentStatus.headlightLedCount || 11),
+        taillightLedCount: light === 'taillight' ? preset.count : (currentStatus.taillightLedCount || 11),
+        headlightLedType: light === 'headlight' ? preset.type : (currentStatus.headlightLedType || 0),
+        taillightLedType: light === 'taillight' ? preset.type : (currentStatus.taillightLedType || 0),
+        headlightColorOrder: light === 'headlight' ? preset.order : (currentStatus.headlightColorOrder || 1),
+        taillightColorOrder: light === 'taillight' ? preset.order : (currentStatus.taillightColorOrder || 1)
+    };
+    
+    fetch('/api/led-config', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(config)
+    })
+    .then(response => response.json())
+    .then(data => {
+        console.log('LED preset applied:', preset.name);
+        alert(`✓ ${preset.name} preset applied to ${light}. Restart device to take effect.`);
+        updateStatus();
+    })
+    .catch(error => {
+        console.error('Error applying preset:', error);
+        alert('Failed to apply preset');
+    });
+}
+
+function toggleCustomConfig(light) {
+    const customDiv = document.getElementById(`custom${light === 'headlight' ? 'Headlight' : 'Taillight'}Config`);
+    if (customDiv) {
+        customDiv.style.display = customDiv.style.display === 'none' ? 'block' : 'none';
+    }
+}
+
+function applyCustomLEDConfig(light) {
+    const isHeadlight = light === 'headlight';
+    const countEl = document.getElementById(`custom${isHeadlight ? 'Headlight' : 'Taillight'}Count`);
+    const typeEl = document.getElementById(`custom${isHeadlight ? 'Headlight' : 'Taillight'}Type`);
+    
+    const count = parseInt(countEl.value) || 20;
+    const type = parseInt(typeEl.value) || 0;
+    
+    if (count < 1 || count > 200) {
+        alert('LED count must be between 1 and 200');
+        return;
+    }
+    
+    // Get current config
+    const currentStatus = lastStatusCache || {};
+    
+    const config = {
+        headlightLedCount: isHeadlight ? count : (currentStatus.headlightLedCount || 11),
+        taillightLedCount: !isHeadlight ? count : (currentStatus.taillightLedCount || 11),
+        headlightLedType: isHeadlight ? type : (currentStatus.headlightLedType || 0),
+        taillightLedType: !isHeadlight ? type : (currentStatus.taillightLedType || 0),
+        headlightColorOrder: isHeadlight ? 1 : (currentStatus.headlightColorOrder || 1),
+        taillightColorOrder: !isHeadlight ? 1 : (currentStatus.taillightColorOrder || 1)
+    };
+    
+    fetch('/api/led-config', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(config)
+    })
+    .then(response => response.json())
+    .then(data => {
+        console.log('Custom LED config applied');
+        alert(`✓ Custom config applied to ${light}. Restart device to take effect.`);
+        // Hide custom panel
+        const customDiv = document.getElementById(`custom${isHeadlight ? 'Headlight' : 'Taillight'}Config`);
+        if (customDiv) customDiv.style.display = 'none';
+        updateStatus();
+    })
+    .catch(error => {
+        console.error('Error applying custom config:', error);
+        alert('Failed to apply custom config');
+    });
 }
 
 function updateLEDConfig() {
@@ -1112,32 +1216,7 @@ function updateLEDConfig() {
     .then(response => response.json())
     .then(data => {
         console.log('LED configuration updated', data);
-        // Update form fields with the response values to ensure they match what was saved
-        // This prevents the auto-refresh from overwriting with stale values
-        if (data.headlightLedCount !== undefined) {
-            const el = document.getElementById('headlightLedCount');
-            if (el) el.value = data.headlightLedCount;
-        }
-        if (data.taillightLedCount !== undefined) {
-            const el = document.getElementById('taillightLedCount');
-            if (el) el.value = data.taillightLedCount;
-        }
-        if (data.headlightLedType !== undefined) {
-            const el = document.getElementById('headlightLedType');
-            if (el) el.value = data.headlightLedType;
-        }
-        if (data.taillightLedType !== undefined) {
-            const el = document.getElementById('taillightLedType');
-            if (el) el.value = data.taillightLedType;
-        }
-        if (data.headlightColorOrder !== undefined) {
-            const el = document.getElementById('headlightColorOrder');
-            if (el) el.value = data.headlightColorOrder;
-        }
-        if (data.taillightColorOrder !== undefined) {
-            const el = document.getElementById('taillightColorOrder');
-            if (el) el.value = data.taillightColorOrder;
-        }
+        updateStatus();
     })
     .catch(error => {
         console.error('Error updating LED config:', error);
