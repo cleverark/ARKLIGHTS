@@ -1,8 +1,8 @@
 {
-  "latest_version": "0.1.7",
-  "download_url": "https://github.com/cleverark/ARKLIGHTS/releases/download/v0.1.7/arklights-v0.1.7.bin",
+  "latest_version": "0.1.8",
+  "download_url": "https://github.com/cleverark/ARKLIGHTS/releases/download/v0.1.8/arklights-v0.1.8.bin",
   "file_size": 1621232,
   "release_notes": "Bug fixes and improvements",
   "min_app_version": "1.0.0",
-  "build_date": "2026-02-05T23:59:23Z"
+  "build_date": "2026-02-06T00:08:40Z"
 }
