@@ -59,7 +59,7 @@ struct CRGBW {
 #define DEBUG_ENABLED false
 
 // Configuration for XIAO ESP32S3
-#define HEADLIGHT_PIN 2
+#define HEADLIGHT_PIN 4
 #define TAILLIGHT_PIN 3
 #define DEFAULT_BRIGHTNESS 128
 
